@@ -1,0 +1,18 @@
+{
+  "name": "kortebaan-lambda",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm run bundle:health",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit",
+    "bundle:health": "esbuild src/health.ts --bundle --platform=node --target=node22 --outfile=dist/health.js --external:@aws-sdk/*"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.163",
+    "@types/node": "^26.6.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
