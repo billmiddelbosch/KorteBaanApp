@@ -29,7 +29,7 @@ const reason = computed<'limit' | 'connection' | null>(() => {
       <p v-if="reason === 'limit'">
         <strong class="font-semibold">Je daglimiet voor AI-analyses is bereikt</strong>
         ({{ me.ai.usedToday }} van {{ me.ai.dailyLimit }}). Morgen kun je weer nieuwe adviezen
-        vragen. Historie en eerdere adviezen blijven gewoon beschikbaar.
+        vragen. Eerdere adviezen en resultaten blijven gewoon beschikbaar.
       </p>
       <p v-else-if="me.role === 'owner'">
         <strong class="font-semibold">AI-advies staat uit.</strong>
@@ -46,7 +46,7 @@ const reason = computed<'limit' | 'connection' | null>(() => {
       </p>
       <p v-else>
         <strong class="font-semibold">AI-advies is tijdelijk niet beschikbaar.</strong>
-        Laat het de eigenaar weten als dit zo blijft. Historie en eerdere adviezen blijven gewoon
+        Laat het de eigenaar weten als dit zo blijft. Eerdere adviezen en resultaten blijven gewoon
         beschikbaar.
       </p>
     </div>

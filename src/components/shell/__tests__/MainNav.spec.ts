@@ -1,18 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { Flag, History } from '@lucide/vue'
+import { Flag, MessageSquareText } from '@lucide/vue'
 import MainNav from '../MainNav.vue'
 
 const items = [
   { label: 'Koersdag', to: '/', icon: Flag },
-  { label: 'Historie', to: '/historie', icon: History },
+  { label: 'Analyse', to: '/analyse', icon: MessageSquareText },
 ]
 
 async function mountAt(path: string) {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: ['/', '/historie', '/historie/:id'].map((p) => ({
+    routes: ['/', '/analyse', '/analyse/:id'].map((p) => ({
       path: p,
       component: { render: () => null },
     })),
@@ -30,8 +30,8 @@ describe('MainNav', () => {
   })
 
   it('keeps a section active on its sub-routes', async () => {
-    const wrapper = await mountAt('/historie/42')
-    expect(currentLabel(wrapper)).toBe('Historie')
+    const wrapper = await mountAt('/analyse/42')
+    expect(currentLabel(wrapper)).toBe('Analyse')
     expect(wrapper.findAll('[aria-current="page"]')).toHaveLength(1)
   })
 })

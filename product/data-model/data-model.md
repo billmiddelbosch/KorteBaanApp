@@ -32,6 +32,12 @@ De indeling van de koppels voor een omloop, bekendgemaakt na afloop van de vorig
 ### Quota
 Een momentopname van de quota's in een omloop, automatisch opgehaald of uitgelezen van een door de gebruiker geüploade foto.
 
+### Analysechat
+Het gesprek van een gebruiker met de AI vóór een draverij, gericht op een inzetadvies. Eén per gebruiker per draverij; blijft beschikbaar tot de draverij voorbij is en verdwijnt daarna, het vastgelegde advies blijft.
+
+### AI-instructie
+Het vaste deel van de opdracht aan de AI (rol, werkwijze), beheerd door de eigenaar, met eerdere versies om naar terug te zetten.
+
 ### Analyse
 Een AI-analyse van een draverij of omloop, uitgevoerd op het moment zelf met de meest recente online data. Opgeslagen data en lessen zijn aanvullende input, maar vervangen de actuele analyse nooit.
 
@@ -62,6 +68,9 @@ Een online bron waar de AI-agent data vandaan heeft gehaald, zodat herkomst en a
 - Omloop has many Quota
 - Draverij and Omloop each have many Analyse (a fresh one per draverij and per omloop)
 - Analyse uses Deelname, Loting, Quota, Les and Bron as input
+- Gebruiker has many Analysechat (one per Draverij)
+- Analysechat belongs to Draverij and uses the current AI-instructie, Les and Bron
+- Analysechat produces an Advies that becomes the starting point of the Speelsessie for that Draverij
 - Gebruiker has many Speelsessie
 - Speelsessie belongs to Draverij
 - Speelsessie has many Advies (one or more per Omloop) and many Weddenschap

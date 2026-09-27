@@ -7,6 +7,7 @@ import {
   PutCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb'
 import type { Alias } from './http'
 
@@ -226,6 +227,22 @@ export async function usageOn(alias: Alias, day: string): Promise<Map<string, nu
   )
   return new Map(
     (res.Items ?? []).map((item) => [String(item.sk).replace('USER#', ''), Number(item.count ?? 0)]),
+  )
+}
+
+// Counts one AI analysis for the user on that day; the item expires after a few weeks
+export async function incrementUsage(alias: Alias, day: string, userId: string): Promise<void> {
+  await doc.send(
+    new UpdateCommand({
+      TableName: tableName(alias),
+      Key: { pk: `USAGE#${day}`, sk: `USER#${userId}` },
+      UpdateExpression: 'ADD #count :one SET expiresAt = if_not_exists(expiresAt, :exp)',
+      ExpressionAttributeNames: { '#count': 'count' },
+      ExpressionAttributeValues: {
+        ':one': 1,
+        ':exp': Math.floor(Date.now() / 1000) + 60 * 24 * 60 * 60,
+      },
+    }),
   )
 }
 

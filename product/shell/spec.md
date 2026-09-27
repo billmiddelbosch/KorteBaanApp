@@ -5,14 +5,14 @@ De shell van Sprintorakel is gebouwd voor gebruik buiten op de baan: één hand,
 
 ## Navigation Structure
 - Koersdag → `/` (startscherm; budget, live quota en inzet-suggesties per omloop)
-- Historie → `/historie` (uitslagen, paarden, pikeurs, stallen)
+- Analyse → `/analyse` (AI-chat vóór de koersdag die leidt tot een inzetadvies)
 - Terugblik → `/terugblik` (resultaten terugkoppelen, lessen)
 - Account-pagina's via het gebruikersmenu, niet in de hoofdnavigatie:
   - Mijn account → `/account`
   - Vrienden beheren → `/account/vrienden` (alleen eigenaar)
   - AI-koppeling → `/account/ai-koppeling` (alleen eigenaar)
 
-Actieve sectie: achtergrond + zwaarder gewicht + `aria-current="page"`. Koersdag matcht alleen exact `/`; andere secties matchen ook hun sub-routes (bijv. `/historie/42`).
+Actieve sectie: achtergrond + zwaarder gewicht + `aria-current="page"`. Koersdag matcht alleen exact `/`; andere secties matchen ook hun sub-routes (bijv. `/analyse/42`).
 
 ## User Menu
 - Telefoon: avatar rechts in de header, menu klapt naar beneden.
@@ -34,5 +34,5 @@ Hybride: bottom tab bar op telefoon, zijbalk vanaf tablet. Tijdens een actieve s
 - Dark mode is class-based (`.dark` op `<html>`) via `useTheme`, met keuze bewaard in localStorage; Auto volgt `prefers-color-scheme`. Diepte in dark mode via lichtere oppervlakken, niet via schaduwen.
 - Touch targets ≥ 44px; tab bar-items 64px hoog, zijbalk-items 48px.
 - Bedragen gebruiken `Intl` nl-NL EUR en `tabular-nums`.
-- Iconen: `@lucide/vue` (Flag, History, ChartLine), 24px, uniforme stroke.
+- Iconen: `@lucide/vue` (Flag, MessageSquareText, ChartLine), 24px, uniforme stroke.
 - Gebruiker en live-sessie zijn nu voorbeelddata in `App.vue`; die worden vervangen zodra de secties Account en Koersdag gebouwd zijn.

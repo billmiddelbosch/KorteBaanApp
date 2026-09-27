@@ -31,13 +31,19 @@ const router = createRouter({
       },
     },
     {
-      path: '/historie',
-      name: 'historie',
-      component: placeholder,
+      path: '/analyse',
+      name: 'analyse',
+      component: () => import('../views/analyse/AnalyseView.vue'),
       meta: {
-        title: 'Historie',
-        description: 'Historische uitslagen, paarden, pikeurs en stallen.',
+        title: 'Analyse',
+        description: 'AI-chat vóór de koersdag die leidt tot een inzetadvies.',
       },
+    },
+    {
+      path: '/analyse/:id',
+      name: 'analyse-chat',
+      component: () => import('../views/analyse/AnalyseChatView.vue'),
+      meta: { title: 'Analyse' },
     },
     {
       path: '/terugblik',
@@ -65,6 +71,12 @@ const router = createRouter({
       name: 'ai-koppeling',
       component: () => import('../views/account/AiConnectionView.vue'),
       meta: { title: 'AI-koppeling', ownerOnly: true },
+    },
+    {
+      path: '/account/ai-instructie',
+      name: 'ai-instructie',
+      component: () => import('../views/account/AiInstructionView.vue'),
+      meta: { title: 'AI-instructie', ownerOnly: true },
     },
     {
       path: '/inloggen',
