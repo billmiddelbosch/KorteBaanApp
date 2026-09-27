@@ -1,4 +1,5 @@
 // Koersdag: domain types, the prompt per omloop and parsing of the AI's structured update
+import type { Review } from './terugblik'
 import {
   formatDutchDate,
   THINKING_STALE_MS,
@@ -76,6 +77,8 @@ export interface KoersdagRecord {
   bets: Bet[]
   countedDay?: string
   finishedAt?: string
+  // Terugblik after the koersdag (uitslagen + evaluatie)
+  review?: Review
   createdAt: string
   updatedAt: string
   // DynamoDB TTL (seconds)

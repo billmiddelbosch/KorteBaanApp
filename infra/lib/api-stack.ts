@@ -170,7 +170,40 @@ export class ApiStack extends cdk.Stack {
       KOERSDAG_WORKER_NAME: koersdagWorkerFn.functionName,
     })
 
-    const accountFunctions = [authFn, meFn, friendsFn, aiConnectionFn, analysisFn, aiInstructionFn, koersdagFn]
+    // Terugblik: uitslagen ophalen, foto lezen and evalueren; same worker pattern as Koersdag
+    const terugblikWorkerFn = makeFn(
+      'TerugblikWorkerFunction',
+      'terugblikWorker',
+      'terugblikWorker.handler',
+      'Terugblik: uitslagen (web search / photo) and evaluation',
+      {
+        memorySize: 512,
+        timeout: cdk.Duration.minutes(5),
+        environment: {
+          TABLE_DEV: tables.dev.tableName,
+          TABLE_PROD: tables.prod.tableName,
+          CLAUDE_SECRET_ARN_DEV: claudeSecrets.dev.secretArn,
+          CLAUDE_SECRET_ARN_PROD: claudeSecrets.prod.secretArn,
+          ...photoEnv,
+        },
+      },
+    )
+    const terugblikFn = accountFn('TerugblikFunction', 'terugblik', 'Terugblik: uitslagen, evaluatie, overzicht, lessen', {
+      ...accountEnv,
+      ...photoEnv,
+      TERUGBLIK_WORKER_NAME: terugblikWorkerFn.functionName,
+    })
+
+    const accountFunctions = [
+      authFn,
+      meFn,
+      friendsFn,
+      aiConnectionFn,
+      analysisFn,
+      aiInstructionFn,
+      koersdagFn,
+      terugblikFn,
+    ]
     for (const fn of accountFunctions) {
       for (const env of envs) {
         tables[env].grantReadWriteData(fn)
@@ -199,6 +232,16 @@ export class ApiStack extends cdk.Stack {
       photoBuckets[env].grantRead(koersdagWorkerFn)
       photoBuckets[env].grantDelete(koersdagWorkerFn)
       koersdagWorkerFn.addAlias(env, { retryAttempts: 0 }).grantInvoke(koersdagFn)
+    }
+
+    for (const env of envs) {
+      tables[env].grantReadWriteData(terugblikWorkerFn)
+      claudeSecrets[env].grantRead(terugblikWorkerFn)
+      photoBuckets[env].grantPut(terugblikFn)
+      photoBuckets[env].grantDelete(terugblikFn)
+      photoBuckets[env].grantRead(terugblikWorkerFn)
+      photoBuckets[env].grantDelete(terugblikWorkerFn)
+      terugblikWorkerFn.addAlias(env, { retryAttempts: 0 }).grantInvoke(terugblikFn)
     }
 
     const functions = [healthFn, ...accountFunctions]
@@ -272,6 +315,16 @@ export class ApiStack extends cdk.Stack {
       ['POST', '/koersdagen/{id}/bets', koersdagFn],
       ['PATCH', '/koersdagen/{id}/bets/{betId}', koersdagFn],
       ['DELETE', '/koersdagen/{id}/bets/{betId}', koersdagFn],
+      ['GET', '/terugblik', terugblikFn],
+      ['GET', '/terugblik/overview', terugblikFn],
+      ['GET', '/terugblik/{id}', terugblikFn],
+      ['POST', '/terugblik/{id}/results/fetch', terugblikFn],
+      ['POST', '/terugblik/{id}/results/photo', terugblikFn],
+      ['PUT', '/terugblik/{id}/results', terugblikFn],
+      ['POST', '/terugblik/{id}/evaluate', terugblikFn],
+      ['PATCH', '/terugblik/{id}/bets/{betId}', terugblikFn],
+      ['GET', '/lessons', terugblikFn],
+      ['DELETE', '/lessons/{id}', terugblikFn],
     ]
     const methods = routes.map(([method, route, fn]) =>
       api.root.resourceForPath(route).addMethod(method, aliasIntegration(fn)),

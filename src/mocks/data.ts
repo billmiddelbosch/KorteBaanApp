@@ -5,6 +5,7 @@
 import type { AiConnection, LinkType, PlaySession, Role } from '@/types/account'
 import type { Chat, Draverij, LockedAdvice } from '@/types/analyse'
 import type { Koersdag } from '@/types/koersdag'
+import type { Evaluation, Lesson, OmloopResult, ReviewStatus, ReviewStep } from '@/types/terugblik'
 
 // Fake, dev-only values. Grouped under neutral keys so secret scanners don't mistake them
 // for real credentials.
@@ -274,3 +275,24 @@ export interface MockKoersdag {
 }
 
 export const koersdagDb: { koersdagen: Record<string, MockKoersdag> } = { koersdagen: {} }
+
+// ── Terugblik ─────────────────────────────────────────────────────────────
+
+// The review of a finished koersdag lives on its MockKoersdag, like the Lambda record
+export interface MockReview {
+  countedDay: string | null
+  // Identifies the pending AI step
+  run?: string
+  status: ReviewStatus
+  error: string | null
+  step: ReviewStep | null
+  results: OmloopResult[] | null
+  resultsConfirmedAt: string | null
+  evaluation: Evaluation | null
+}
+
+// Lessons in the shared kennisbank. Starts empty: an evaluation adds them.
+export const terugblikDb: { reviews: Record<string, MockReview>; lessons: Lesson[] } = {
+  reviews: {},
+  lessons: [],
+}

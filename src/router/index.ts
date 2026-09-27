@@ -14,8 +14,6 @@ declare module 'vue-router' {
   }
 }
 
-// Placeholder views until each roadmap section gets its own screens
-const placeholder = () => import('../views/PlaceholderView.vue')
 const linkView = () => import('../views/auth/LinkView.vue')
 
 const router = createRouter({
@@ -48,11 +46,14 @@ const router = createRouter({
     {
       path: '/terugblik',
       name: 'terugblik',
-      component: placeholder,
-      meta: {
-        title: 'Terugblik',
-        description: 'Resultaten terugkoppelen en lessen uit het kennissysteem.',
-      },
+      component: () => import('../views/terugblik/TerugblikView.vue'),
+      meta: { title: 'Terugblik' },
+    },
+    {
+      path: '/terugblik/:id',
+      name: 'terugblik-detail',
+      component: () => import('../views/terugblik/TerugblikDetailView.vue'),
+      meta: { title: 'Terugblik' },
     },
     {
       path: '/account',
