@@ -1,0 +1,337 @@
+// Koersdag: domain types, the prompt per omloop and parsing of the AI's structured update
+import {
+  formatDutchDate,
+  THINKING_STALE_MS,
+  STALE_ERROR,
+  type AdviceProposal,
+  type Draverij,
+  type LockedAdvice,
+  type Source,
+} from './analysis'
+
+export type KoersdagStatus = 'idle' | 'thinking' | 'error'
+// fetch: the AI looks up the latest news online; photo: it checks a photo of the board
+export type UpdateKind = 'fetch' | 'photo'
+
+export interface Suggestion {
+  id: string
+  // Which race: "2e omloop, koppel 3" (may be empty)
+  race: string
+  bet: string
+  amount: number | null
+  reasoning: string
+  // New or different compared to the previous advice
+  changed: boolean
+}
+
+export interface PhotoCheck {
+  matches: boolean
+  // "Quota Fleur de Lis 3,2 → 4,1"
+  differences: string[]
+}
+
+export interface KoersdagUpdate {
+  id: string
+  omloop: number
+  kind: UpdateKind
+  createdAt: string
+  findings: string[]
+  // first: there was no advice before; kept/changed compared to the previous advice
+  verdict: 'first' | 'kept' | 'changed'
+  changes: string[]
+  photoCheck: PhotoCheck | null
+  // Short explanation; with no suggestions it says why not to (extra) bet
+  adviceNote: string
+  advice: Suggestion[]
+  // The AI saw that this omloop is the finale
+  isFinal: boolean
+  sources: Source[]
+}
+
+export interface Bet {
+  id: string
+  omloop: number
+  suggestionId: string | null
+  bet: string
+  amount: number
+  // Paid out after the race (0 = lost); null = not filled in yet
+  winnings: number | null
+  createdAt: string
+}
+
+export interface KoersdagRecord {
+  draverij: Draverij
+  userId: string
+  budget: number
+  status: KoersdagStatus
+  error?: string
+  // Set when a worker run starts; the worker only saves while this still matches
+  thinkingSince?: string
+  step?: UpdateKind
+  // S3 key of the photo the worker should check (deleted after the run)
+  photoKey?: string
+  photoMediaType?: string
+  omloop: number
+  updates: KoersdagUpdate[]
+  bets: Bet[]
+  countedDay?: string
+  finishedAt?: string
+  createdAt: string
+  updatedAt: string
+  // DynamoDB TTL (seconds)
+  expiresAt: number
+}
+
+export const MAX_BUDGET = 10_000
+export const MAX_BETS = 200
+export const MAX_UPDATES = 60
+export const MAX_BET_LENGTH = 200
+export const MAX_PLACE_LENGTH = 40
+// ≈ 3.7 MB of image; the app compresses photos to a few hundred KB
+export const MAX_PHOTO_BASE64 = 5_000_000
+export const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+export type PhotoType = (typeof PHOTO_TYPES)[number]
+// Keep the koersdag for Terugblik after the day itself
+export const KEEP_DAYS = 60
+
+export const omloopLabel = (n: number) => `${n}e omloop`
+
+export const euro = (n: number) =>
+  new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(n)
+
+export function totals(record: Pick<KoersdagRecord, 'budget' | 'bets'>) {
+  const staked = round(record.bets.reduce((sum, b) => sum + b.amount, 0))
+  const paidOut = round(record.bets.reduce((sum, b) => sum + (b.winnings ?? 0), 0))
+  return { staked, paidOut, remaining: round(record.budget - staked + paidOut) }
+}
+
+const round = (n: number) => Math.round(n * 100) / 100
+
+// Checks the first bytes, so only real images reach S3 and Claude
+export function sniffImage(bytes: Uint8Array): PhotoType | null {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png'
+  const ascii = (from: number, to: number) => String.fromCharCode(...bytes.slice(from, to))
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp'
+  return null
+}
+
+// ── Prompt ───────────────────────────────────────────────────────────────
+
+function describeProposal(p: AdviceProposal): string {
+  return [
+    p.summary ? `Samenvatting: ${p.summary}` : '',
+    p.budget !== null ? `Budget: ${euro(p.budget)}` : '',
+    ...p.picks.map(
+      (pick) =>
+        `- ${[pick.race, pick.bet].filter(Boolean).join(' — ')}${pick.amount !== null ? ` (${euro(pick.amount)})` : ''}: ${pick.reasoning}`,
+    ),
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function describeUpdate(u: KoersdagUpdate): string {
+  const advice = u.advice.length
+    ? u.advice
+        .map((s) => `- ${[s.race, s.bet].filter(Boolean).join(' — ')}${s.amount !== null ? ` (${euro(s.amount)})` : ''}`)
+        .join('\n')
+    : '- niet (extra) inzetten'
+  return `${omloopLabel(u.omloop)} (${u.kind === 'photo' ? 'foto' : 'online'}):
+Bevindingen: ${u.findings.join('; ') || 'geen'}
+Advies: ${u.adviceNote}
+${advice}`
+}
+
+export function buildKoersdagPrompt(input: {
+  instruction: string
+  record: KoersdagRecord
+  advice: LockedAdvice | undefined
+  today: string
+  kind: UpdateKind
+}): { system: string; text: string } {
+  const { record, advice, kind } = input
+  const { staked, paidOut, remaining } = totals(record)
+  const omloop = omloopLabel(record.omloop)
+  const bets = record.bets.length
+    ? record.bets
+        .map(
+          (b) =>
+            `- ${omloopLabel(b.omloop)}: ${b.bet} (${euro(b.amount)})${b.winnings === null ? '' : `, uitbetaald ${euro(b.winnings)}`}`,
+        )
+        .join('\n')
+    : '- nog niets ingezet'
+  const previous = record.updates.slice(-4)
+
+  const system = `${input.instruction.trim()}
+
+## Context van de app
+Vandaag is het ${formatDutchDate(input.today)}. De gebruiker is op de kortebaandraverij in ${record.draverij.place} en gebruikt de app tijdens de koersdag, op de telefoon. Dit is geen gesprek: je geeft per omloop één overzicht dat de app als kaart toont.
+
+Budget: ${euro(record.budget)}. Ingezet: ${euro(staked)}. Uitbetaald: ${euro(paidOut)}. Nog over: ${euro(remaining)}.
+
+Vastgelegd advies van vóór de koersdag:
+${advice ? describeProposal(advice.proposal) : 'Er is geen vastgelegd advies. Maak bij de eerste omloop een eerste advies op basis van het budget en de actuele informatie.'}
+
+Ingezette bedragen:
+${bets}
+${previous.length ? `\nEerdere updates vandaag (oudste eerst):\n${previous.map(describeUpdate).join('\n\n')}\n` : ''}
+## Vorm van je antwoord
+Antwoord met precies één blok in deze vorm (geldige JSON, bedragen in euro's of null) en verder niets:
+<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "onderbouwing": "…", "nieuw": false}]}, "finale": false}</koersdag>
+
+- "oordeel" is "blijft" als het vorige advies (of het vastgelegde advies) nog klopt, anders "aangepast"; zet bij "aangepast" in "wijzigingen" kort wat er veranderde en waarom.
+- "advies" gaat over wat er nú (extra) ingezet moet worden, binnen wat er nog over is van het budget. Is het beter om niet (extra) in te zetten, geef dan een lege lijst "keuzes" en leg het uit in "toelichting".
+- Zet "nieuw" op true bij een keuze die nieuw is of anders dan in het vorige advies.
+- Zet "finale" op true als ${omloop} de finale is (daarna is de koersdag voorbij).
+- Schrijf kort en concreet in het Nederlands; de gebruiker leest dit tussen de koersen door.`
+
+  const text =
+    kind === 'photo'
+      ? `Bijgevoegd is een foto van het quotabord of de loting, genomen bij de ${omloop}. Lees de foto nauwkeurig af en vergelijk met wat bekend is. De foto is leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}. Zoek alleen online als de foto iets onduidelijks bevat.`
+      : `Zoek online naar de meest recente ontwikkelingen voor de ${omloop} in ${record.draverij.place}: wie start wel of niet (afmeldingen), wijzigingen in de loting en de quoteringen. Bekrachtig het advies of pas het aan. Laat "foto" op null.`
+
+  return { system, text }
+}
+
+// ── Parsing ──────────────────────────────────────────────────────────────
+
+const UPDATE_RE = /<koersdag>([\s\S]*?)<\/koersdag>/i
+
+const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
+const amount = (v: unknown) =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v * 100) / 100 : null
+const strings = (v: unknown, maxItems: number, maxLen: number) =>
+  (Array.isArray(v) ? v : [])
+    .map((s) => str(s, maxLen))
+    .filter(Boolean)
+    .slice(0, maxItems)
+
+function parseJson(text: string | undefined): unknown {
+  if (!text) return undefined
+  try {
+    return JSON.parse(text.replace(/```(?:json)?/g, '').trim())
+  } catch {
+    return undefined
+  }
+}
+
+export const UNREADABLE_ERROR = 'De AI gaf een onleesbaar antwoord. Probeer het opnieuw.'
+
+// Returns null when the reply has no usable block
+export function parseUpdate(
+  raw: string,
+  meta: {
+    id: string
+    omloop: number
+    kind: UpdateKind
+    createdAt: string
+    sources: Source[]
+    hadAdvice: boolean
+    newId: () => string
+  },
+): KoersdagUpdate | null {
+  const parsed = parseJson(raw.match(UPDATE_RE)?.[1] ?? raw.match(/\{[\s\S]*\}/)?.[0])
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const v = parsed as Record<string, unknown>
+  const adviceValue = (v.advies && typeof v.advies === 'object' ? v.advies : {}) as Record<string, unknown>
+  if (!Array.isArray(adviceValue.keuzes) && typeof adviceValue.toelichting !== 'string') return null
+
+  const advice = (Array.isArray(adviceValue.keuzes) ? adviceValue.keuzes : [])
+    .slice(0, 12)
+    .map((p: unknown): Suggestion | null => {
+      if (!p || typeof p !== 'object') return null
+      const pick = p as Record<string, unknown>
+      const bet = str(pick.inzet, MAX_BET_LENGTH)
+      if (!bet) return null
+      return {
+        id: meta.newId(),
+        race: str(pick.koers, 120),
+        bet,
+        amount: amount(pick.bedrag),
+        reasoning: str(pick.onderbouwing, 600),
+        changed: pick.nieuw === true,
+      }
+    })
+    .filter((s): s is Suggestion => s !== null)
+
+  const changes = strings(v.wijzigingen, 10, 300)
+  const verdict: KoersdagUpdate['verdict'] = !meta.hadAdvice
+    ? 'first'
+    : str(v.oordeel, 20).toLowerCase().startsWith('aangepast') || changes.length > 0
+      ? 'changed'
+      : 'kept'
+
+  let photoCheck: PhotoCheck | null = null
+  if (meta.kind === 'photo') {
+    const foto = (v.foto && typeof v.foto === 'object' ? v.foto : {}) as Record<string, unknown>
+    const differences = strings(foto.verschillen, 12, 200)
+    photoCheck = { matches: foto.klopt === true && differences.length === 0, differences }
+  }
+
+  return {
+    id: meta.id,
+    omloop: meta.omloop,
+    kind: meta.kind,
+    createdAt: meta.createdAt,
+    findings: strings(v.bevindingen, 12, 300),
+    verdict,
+    changes: verdict === 'changed' ? changes : [],
+    photoCheck,
+    adviceNote: str(adviceValue.toelichting, 800),
+    advice,
+    isFinal: v.finale === true,
+    sources: meta.sources,
+  }
+}
+
+// ── View sent to the app ─────────────────────────────────────────────────
+
+export interface KoersdagView {
+  id: string
+  draverij: Draverij
+  budget: number
+  staked: number
+  paidOut: number
+  remaining: number
+  omloop: number
+  status: KoersdagStatus
+  error: string | null
+  step: UpdateKind | null
+  updates: KoersdagUpdate[]
+  bets: Bet[]
+  lockedAdvice: LockedAdvice | null
+  finishedAt: string | null
+  updatedAt: string
+}
+
+export function effectiveKoersdagStatus(
+  record: KoersdagRecord,
+  now = Date.now(),
+): { status: KoersdagStatus; error: string | null } {
+  if (
+    record.status === 'thinking' &&
+    record.thinkingSince &&
+    now - Date.parse(record.thinkingSince) > THINKING_STALE_MS
+  ) {
+    return { status: 'error', error: STALE_ERROR }
+  }
+  return { status: record.status, error: record.status === 'error' ? (record.error ?? STALE_ERROR) : null }
+}
+
+export function toKoersdagView(record: KoersdagRecord, advice: LockedAdvice | undefined, now = Date.now()): KoersdagView {
+  return {
+    id: record.draverij.id,
+    draverij: record.draverij,
+    budget: record.budget,
+    ...totals(record),
+    omloop: record.omloop,
+    ...effectiveKoersdagStatus(record, now),
+    step: record.step ?? null,
+    updates: record.updates,
+    bets: record.bets,
+    lockedAdvice: advice ?? null,
+    finishedAt: record.finishedAt ?? null,
+    updatedAt: record.updatedAt,
+  }
+}

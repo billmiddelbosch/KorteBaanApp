@@ -24,7 +24,7 @@ const router = createRouter({
     {
       path: '/',
       name: 'koersdag',
-      component: placeholder,
+      component: () => import('../views/koersdag/KoersdagView.vue'),
       meta: {
         title: 'Koersdag',
         description: 'Budget, live quota en inzet-suggesties per omloop.',

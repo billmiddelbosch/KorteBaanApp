@@ -1,20 +1,23 @@
 import { http, HttpResponse, delay } from 'msw'
 import type { AiConnection, Friend, IssuedLink, LinkType, Me } from '@/types/account'
 import type { AiInstruction, Chat, ChatMessage, ChatSummary, Draverij, Source } from '@/types/analyse'
+import type { Koersdag, KoersdagToday, KoersdagUpdate, UpdateKind } from '@/types/koersdag'
 import {
   analyseDb,
   db,
   issueToken,
+  koersdagDb,
   MOCK_DEFAULT_INSTRUCTION,
   newLinkToken,
   userForLink,
   userForToken,
   type MockChat,
+  type MockKoersdag,
   type MockUser,
 } from './data'
 
 // Mirrors the Lambda handlers in lambda/src (auth, me, friends, aiConnection, analysis,
-// aiInstruction):
+// aiInstruction, koersdag):
 // same routes, response shapes and Dutch messages.
 
 const BASE = '/api'
@@ -250,8 +253,8 @@ function mockReply(chat: Chat): ChatMessage | { error: string } {
   }
 }
 
-// Checks the AI connection and daily limit like the Lambda, then answers after a short delay
-function startTurn(user: MockUser, entry: MockChat, message?: ChatMessage): Response | null {
+// AI connection and daily limit, like lambda/src/lib/aiAccess.ts; counted once per day per item
+function claimAiRun(user: MockUser, entry: { countedDay: string | null }): Response | null {
   if (db.ai.status === 'none') {
     return fail(409, 'De AI is nog niet gekoppeld. Vraag de eigenaar om de AI-koppeling in te stellen.')
   }
@@ -270,6 +273,13 @@ function startTurn(user: MockUser, entry: MockChat, message?: ChatMessage): Resp
     db.usageToday[user.id] = used + 1
     entry.countedDay = today
   }
+  return null
+}
+
+// Checks the AI connection and daily limit like the Lambda, then answers after a short delay
+function startTurn(user: MockUser, entry: MockChat, message?: ChatMessage): Response | null {
+  const refused = claimAiRun(user, entry)
+  if (refused) return refused
 
   const { chat } = entry
   if (message) chat.messages.push(message)
@@ -307,6 +317,188 @@ function saveInstruction(text: string) {
     updatedAt: new Date().toISOString(),
     previous: analyseDb.instruction.text,
   }
+}
+
+// ── Koersdag helpers ────────────────────────────────────────────────────
+
+const KOERSDAG_GONE = 'Deze koersdag bestaat niet (meer).'
+const KOERSDAG_FINISHED = 'Deze koersdag is al afgerond.'
+const MAX_AMOUNT = 10_000
+const MAX_PHOTO_BASE64 = 5_000_000
+
+const round2 = (n: number) => Math.round(n * 100) / 100
+const euro = (n: number) =>
+  new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(n)
+
+function koersdagView(entry: MockKoersdag): Koersdag {
+  const { koersdag } = entry
+  const staked = round2(koersdag.bets.reduce((sum, b) => sum + b.amount, 0))
+  const paidOut = round2(koersdag.bets.reduce((sum, b) => sum + (b.winnings ?? 0), 0))
+  return {
+    ...structuredClone(koersdag),
+    staked,
+    paidOut,
+    remaining: round2(koersdag.budget - staked + paidOut),
+    lockedAdvice: analyseDb.advice[chatKey(entry.userId, koersdag.id)] ?? null,
+  }
+}
+
+// An amount in euro's (winnings may be 0); an error response otherwise
+function checkAmount(value: unknown, message: string, allowZero = false): number | Response {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    (!allowZero && value === 0)
+  ) {
+    return fail(400, message)
+  }
+  if (value > MAX_AMOUNT) return fail(400, `Een bedrag mag maximaal € ${MAX_AMOUNT} zijn.`)
+  return round2(value)
+}
+
+// The Lambda sniffs the bytes; the mock checks the base64 prefix
+function sniffBase64(image: string): boolean {
+  return ['/9j/', 'iVBOR', 'UklGR'].some((prefix) => image.startsWith(prefix))
+}
+
+let koersdagSeq = 0
+const nextId = (prefix: string) => `${prefix}-mock-${++koersdagSeq}`
+
+// Canned AI per omloop: omloop 1 confirms the advice, omloop 2 changes it, omloop 3 is the
+// finale; a photo shows a difference with the board. A draverij whose name contains "fout"
+// can't be fetched online, to show the error state (a photo still works).
+function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { error: string } {
+  const { koersdag } = entry
+  if (kind === 'fetch' && /fout/i.test(koersdag.draverij.place)) {
+    return {
+      error:
+        'De AI kon online niets actueels vinden over deze draverij. Maak een foto van het bord of probeer het opnieuw.',
+    }
+  }
+  const omloop = koersdag.omloop
+  const label = `${omloop}e omloop`
+  const base = {
+    id: nextId('u'),
+    omloop,
+    kind,
+    createdAt: new Date().toISOString(),
+    sources: kind === 'fetch' ? MOCK_SOURCES.slice(0, 1) : [],
+    photoCheck: null,
+    changes: [],
+    isFinal: false,
+  }
+  const pick = (race: string, bet: string, amount: number, reasoning: string, changed = false) => ({
+    id: nextId('s'),
+    race,
+    bet,
+    amount,
+    reasoning,
+    changed,
+  })
+
+  if (kind === 'photo') {
+    return {
+      ...base,
+      findings: ['Het bord toont een hogere quote voor Fleur de Lis.'],
+      verdict: 'changed',
+      changes: ['Minder op Fleur de Lis: de quote steeg, de markt twijfelt.'],
+      photoCheck: { matches: false, differences: ['Quota Fleur de Lis 3,2 → 4,1'] },
+      adviceNote: 'Zet minder in op Fleur de Lis; de rest blijft staan.',
+      advice: [
+        pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 10, 'Nog steeds de sterkste.', true),
+      ],
+    }
+  }
+  if (omloop >= 3) {
+    return {
+      ...base,
+      findings: ['De finale is bekend: Ilse van de Heide tegen Hessel B.'],
+      verdict: 'kept',
+      adviceNote: 'Dit is de finale: de gok op Ilse van de Heide blijft staan.',
+      advice: [pick('Finale', 'Winnaar: Ilse van de Heide', 10, 'Buitenkans met hoge quote.')],
+      isFinal: true,
+    }
+  }
+  if (omloop === 2) {
+    return {
+      ...base,
+      findings: ['Afmelding: Zorro W start niet in koppel 1.'],
+      verdict: 'changed',
+      changes: ['Nieuw: Hessel B, want zijn sterkste tegenstander is afgemeld.'],
+      adviceNote: 'Een kleine extra inzet op Hessel B.',
+      advice: [pick(`${label}, koppel 1`, 'Winnaar: Hessel B', 5, 'Tegenstander afgemeld.', true)],
+    }
+  }
+  const hadAdvice =
+    !!analyseDb.advice[chatKey(entry.userId, koersdag.id)] || koersdag.updates.length > 0
+  return {
+    ...base,
+    findings: ['Geen afmeldingen voor de 1e omloop.', 'Quota Fleur de Lis 3,2.'],
+    verdict: hadAdvice ? 'kept' : 'first',
+    adviceNote: hadAdvice
+      ? 'Het vastgelegde advies klopt nog: zet in op Fleur de Lis.'
+      : `Eerste advies binnen je budget van ${euro(koersdag.budget)}.`,
+    advice: [
+      pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 20, 'Won twee van de laatste drie.'),
+    ],
+  }
+}
+
+// Like the Lambda: checks the AI connection and daily limit, then answers after a short delay
+function startUpdate(
+  user: MockUser,
+  entry: MockKoersdag,
+  kind: UpdateKind,
+  prepare: () => void = () => {},
+): Response | null {
+  const { koersdag } = entry
+  if (koersdag.finishedAt) return fail(409, KOERSDAG_FINISHED)
+  if (koersdag.status === 'thinking') {
+    return fail(409, 'De AI is nog bezig met de vorige update. Wacht even.')
+  }
+  const refused = claimAiRun(user, entry)
+  if (refused) return refused
+  prepare()
+  const run = nextId('run')
+  entry.run = run
+  Object.assign(koersdag, {
+    status: 'thinking',
+    error: null,
+    step: kind,
+    updatedAt: new Date().toISOString(),
+  })
+  setTimeout(() => {
+    // Finished meanwhile: this answer is no longer wanted
+    if (entry.run !== run || koersdag.status !== 'thinking') return
+    const result = mockUpdate(entry, kind)
+    const updatedAt = new Date().toISOString()
+    if ('error' in result) {
+      Object.assign(koersdag, { status: 'error', error: result.error, updatedAt })
+    } else {
+      koersdag.updates.push(result)
+      Object.assign(koersdag, { status: 'idle', error: null, updatedAt })
+    }
+  }, AI_REPLY_DELAY)
+  return null
+}
+
+type KoersdagGuard =
+  | { user: MockUser; entry: MockKoersdag; error?: never }
+  | { user?: never; entry?: never; error: Response }
+
+function koersdagFor(request: Request, id: unknown): KoersdagGuard {
+  const { user, error } = authenticate(request)
+  if (error) return { error }
+  const entry = koersdagDb.koersdagen[chatKey(user.id, String(id))]
+  if (!entry) return { error: fail(404, KOERSDAG_GONE) }
+  return { user, entry }
+}
+
+function openKoersdagFor(request: Request, id: unknown): KoersdagGuard {
+  const guard = koersdagFor(request, id)
+  if (guard.entry?.koersdag.finishedAt) return { error: fail(409, KOERSDAG_FINISHED) }
+  return guard
 }
 
 type Body = Record<string, unknown>
@@ -750,5 +942,235 @@ export const handlers = [
       return HttpResponse.json(instructionView())
     }
     return fail(400, 'Kies of je terugzet naar de vorige of de standaardversie.')
+  }),
+
+  // ── Koersdag ──────────────────────────────────────────────────────────
+
+  http.get(`${BASE}/koersdagen/today`, async ({ request }) => {
+    await delay(LAG)
+    const { user, error } = authenticate(request)
+    if (error) return error
+    const today = todayIso()
+    const todays = analyseDb.draverijen.filter((d) => d.date === today)
+    const entries = todays
+      .map((d) => koersdagDb.koersdagen[chatKey(user.id, d.id)])
+      .filter((e): e is MockKoersdag => e !== undefined)
+    // An open koersdag wins over a finished one
+    const current = entries.find((e) => !e.koersdag.finishedAt) ?? entries[0]
+    const advice = Object.entries(analyseDb.advice)
+      .filter(([key]) => key.startsWith(`${user.id}/`))
+      .map(([, a]) => a)
+    const next = advice
+      .filter((a) => a.draverij.date > today)
+      .sort((a, b) => a.draverij.date.localeCompare(b.draverij.date))[0]
+    const body: KoersdagToday = {
+      current: current ? koersdagView(current) : null,
+      options: todays.map((d) => ({
+        draverij: d,
+        advice: analyseDb.advice[chatKey(user.id, d.id)] ?? null,
+      })),
+      next: next ?? null,
+    }
+    return HttpResponse.json(body)
+  }),
+
+  http.post(`${BASE}/koersdagen`, async ({ request }) => {
+    await delay(LAG)
+    const { user, error } = authenticate(request)
+    if (error) return error
+    const body = (await request.json()) as Body
+    const budget = checkAmount(body.budget, 'Vul een budget in van meer dan € 0.')
+    if (budget instanceof Response) return budget
+    const today = todayIso()
+    let draverij: Draverij | undefined
+    if (typeof body.draverijId === 'string') {
+      draverij = analyseDb.draverijen.find((d) => d.id === body.draverijId)
+      if (!draverij || draverij.date !== today) return fail(404, 'Deze draverij is niet vandaag.')
+    } else {
+      const place = validName(body.place)
+      if (!place) return fail(400, 'Kies de draverij van vandaag.')
+      if (place.length > 40) return fail(400, 'De plaats mag maximaal 40 tekens zijn.')
+      const slug = place
+        .normalize('NFD')
+        .replace(/\p{M}/gu, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+      if (!slug) return fail(400, 'Gebruik letters in de plaatsnaam.')
+      const id = `${today}-${slug}`
+      draverij = analyseDb.draverijen.find((d) => d.id === id)
+      if (!draverij) {
+        draverij = { id, place, date: today }
+        analyseDb.draverijen.push(draverij)
+      }
+    }
+
+    const key = chatKey(user.id, draverij.id)
+    const existing = koersdagDb.koersdagen[key]
+    if (existing) return HttpResponse.json(koersdagView(existing))
+
+    const entry: MockKoersdag = {
+      userId: user.id,
+      countedDay: null,
+      koersdag: {
+        id: draverij.id,
+        draverij,
+        budget,
+        omloop: 1,
+        status: 'idle',
+        error: null,
+        step: null,
+        updates: [],
+        bets: [],
+        finishedAt: null,
+        updatedAt: new Date().toISOString(),
+      },
+    }
+    koersdagDb.koersdagen[key] = entry
+    const refused = startUpdate(user, entry, 'fetch')
+    if (refused) {
+      // The koersdag exists; the AI couldn't start (limit, no connection). Show it with the reason.
+      const { message } = (await refused.json()) as { message: string }
+      Object.assign(entry.koersdag, { status: 'error', error: message, step: 'fetch' })
+    }
+    return HttpResponse.json(koersdagView(entry), { status: 201 })
+  }),
+
+  http.get(`${BASE}/koersdagen/:id`, async ({ params, request }) => {
+    await delay(LAG)
+    const { entry, error } = koersdagFor(request, params.id)
+    if (error) return error
+    return HttpResponse.json(koersdagView(entry))
+  }),
+
+  http.post(`${BASE}/koersdagen/:id/refresh`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = koersdagFor(request, params.id)
+    if (error) return error
+    const refused = startUpdate(user, entry, 'fetch')
+    if (refused) return refused
+    return HttpResponse.json(koersdagView(entry), { status: 202 })
+  }),
+
+  http.post(`${BASE}/koersdagen/:id/photo`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = koersdagFor(request, params.id)
+    if (error) return error
+    const body = (await request.json()) as Body
+    if (
+      typeof body.mediaType !== 'string' ||
+      !['image/jpeg', 'image/png', 'image/webp'].includes(body.mediaType)
+    ) {
+      return fail(400, 'Gebruik een foto (JPG, PNG of WebP).')
+    }
+    const image = typeof body.image === 'string' ? body.image : ''
+    if (!image) return fail(400, 'Maak eerst een foto.')
+    if (image.length > MAX_PHOTO_BASE64) {
+      return fail(413, 'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.')
+    }
+    if (!sniffBase64(image)) return fail(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
+    const refused = startUpdate(user, entry, 'photo')
+    if (refused) return refused
+    return HttpResponse.json(koersdagView(entry), { status: 202 })
+  }),
+
+  http.post(`${BASE}/koersdagen/:id/next`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = koersdagFor(request, params.id)
+    if (error) return error
+    const refused = startUpdate(user, entry, 'fetch', () => {
+      entry.koersdag.omloop += 1
+    })
+    if (refused) return refused
+    return HttpResponse.json(koersdagView(entry), { status: 202 })
+  }),
+
+  http.post(`${BASE}/koersdagen/:id/finish`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = openKoersdagFor(request, params.id)
+    if (error) return error
+    const now = new Date().toISOString()
+    entry.run = undefined
+    Object.assign(entry.koersdag, { status: 'idle', error: null, finishedAt: now, updatedAt: now })
+    const view = koersdagView(entry)
+    const sessions = (db.sessions[user.id] ??= [])
+    const session = {
+      id: view.draverij.id,
+      date: view.draverij.date,
+      draverij: view.draverij.place,
+      staked: view.staked,
+      paidOut: view.paidOut,
+    }
+    const index = sessions.findIndex((s) => s.id === session.id)
+    if (index >= 0) sessions[index] = session
+    else sessions.unshift(session)
+    return HttpResponse.json(view)
+  }),
+
+  http.post(`${BASE}/koersdagen/:id/bets`, async ({ params, request }) => {
+    await delay(LAG)
+    const { entry, error } = openKoersdagFor(request, params.id)
+    if (error) return error
+    const body = (await request.json()) as Body
+    const text = validName(body.bet).slice(0, 200)
+    if (!text) return fail(400, 'Vul in waarop je hebt ingezet.')
+    const amount = checkAmount(body.amount, 'Vul een inzet in van meer dan € 0.')
+    if (amount instanceof Response) return amount
+    const { koersdag } = entry
+    const suggestionId = typeof body.suggestionId === 'string' ? body.suggestionId : null
+    if (suggestionId && !koersdag.updates.some((u) => u.advice.some((s) => s.id === suggestionId))) {
+      return fail(404, 'Deze suggestie bestaat niet (meer).')
+    }
+    if (!suggestionId || !koersdag.bets.some((b) => b.suggestionId === suggestionId)) {
+      koersdag.bets.push({
+        id: nextId('b'),
+        omloop: koersdag.omloop,
+        suggestionId,
+        bet: text,
+        amount,
+        winnings: null,
+        createdAt: new Date().toISOString(),
+      })
+      koersdag.updatedAt = new Date().toISOString()
+    }
+    return HttpResponse.json(koersdagView(entry), { status: 201 })
+  }),
+
+  http.patch(`${BASE}/koersdagen/:id/bets/:betId`, async ({ params, request }) => {
+    await delay(LAG)
+    const { entry, error } = openKoersdagFor(request, params.id)
+    if (error) return error
+    const body = (await request.json()) as Body
+    const hasAmount = 'amount' in body
+    const hasWinnings = 'winnings' in body
+    if (!hasAmount && !hasWinnings) return fail(400, 'Er is niets om te wijzigen.')
+    const amount = hasAmount
+      ? checkAmount(body.amount, 'Vul een inzet in van meer dan € 0.')
+      : undefined
+    if (amount instanceof Response) return amount
+    const winnings =
+      hasWinnings && body.winnings !== null
+        ? checkAmount(body.winnings, 'Vul de uitbetaling in (0 als de inzet verloren is).', true)
+        : null
+    if (winnings instanceof Response) return winnings
+    const bet = entry.koersdag.bets.find((b) => b.id === params.betId)
+    if (!bet) return fail(404, 'Deze inzet bestaat niet (meer).')
+    if (amount !== undefined) bet.amount = amount
+    if (hasWinnings) bet.winnings = winnings
+    entry.koersdag.updatedAt = new Date().toISOString()
+    return HttpResponse.json(koersdagView(entry))
+  }),
+
+  http.delete(`${BASE}/koersdagen/:id/bets/:betId`, async ({ params, request }) => {
+    await delay(LAG)
+    const { entry, error } = openKoersdagFor(request, params.id)
+    if (error) return error
+    const { koersdag } = entry
+    if (!koersdag.bets.some((b) => b.id === params.betId)) {
+      return fail(404, 'Deze inzet bestaat niet (meer).')
+    }
+    koersdag.bets = koersdag.bets.filter((b) => b.id !== params.betId)
+    koersdag.updatedAt = new Date().toISOString()
+    return HttpResponse.json(koersdagView(entry))
   }),
 ]

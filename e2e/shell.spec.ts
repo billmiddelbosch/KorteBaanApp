@@ -15,7 +15,7 @@ test.describe('App shell', () => {
         'aria-current',
         'page',
       )
-      await expect(page.getByRole('heading', { name: 'Koersdag' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Koersdag', exact: true })).toBeVisible()
       await expect(page).toHaveTitle('Koersdag · Sprintorakel')
     })
 
@@ -63,9 +63,16 @@ test.describe('App shell', () => {
     test.use({ viewport: { width: 390, height: 844 } })
 
     test('shows the bottom tab bar and the live bar', async ({ page }) => {
-      await page.goto('/analyse')
+      // The live bar only shows during a koersdag: start one first
+      await page.goto('/')
+      await page.getByLabel('Budget voor vandaag').fill('40')
+      await page.getByRole('button', { name: 'Koersdag starten' }).click()
+      await expect(page.getByRole('heading', { name: '1e omloop' })).toBeVisible()
+
       const nav = page.getByRole('navigation', { name: 'Hoofdnavigatie' })
       await expect(nav.getByRole('link')).toHaveCount(3)
+      await nav.getByRole('link', { name: 'Analyse' }).click()
+      await expect(page).toHaveURL(/\/analyse$/)
       await expect(page.getByRole('link', { name: /^Live:/ })).toBeVisible()
 
       await page.getByRole('link', { name: /^Live:/ }).click()

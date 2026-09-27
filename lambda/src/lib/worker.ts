@@ -9,10 +9,15 @@ export interface WorkerJob {
   thinkingSince: string
 }
 
-// Fire-and-forget: the worker may run for minutes, longer than API Gateway waits
-export async function startWorker(alias: Alias, job: WorkerJob): Promise<void> {
-  const FunctionName = process.env.ANALYSIS_WORKER_NAME
-  if (!FunctionName) throw new Error('ANALYSIS_WORKER_NAME is not set')
+// Fire-and-forget: the worker may run for minutes, longer than API Gateway waits.
+// `envName` holds the worker's function name (Analyse and Koersdag each have their own worker).
+export async function startWorker(
+  alias: Alias,
+  job: WorkerJob,
+  envName = 'ANALYSIS_WORKER_NAME',
+): Promise<void> {
+  const FunctionName = process.env[envName]
+  if (!FunctionName) throw new Error(`${envName} is not set`)
   await client.send(
     new InvokeCommand({
       FunctionName,

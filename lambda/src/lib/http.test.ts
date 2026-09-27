@@ -19,11 +19,13 @@ describe('aliasOf', () => {
 describe('corsOrigin', () => {
   it('echoes allowed prod origins', () => {
     expect(corsOrigin('prod', 'https://www.kortebaan.nl')).toBe('https://www.kortebaan.nl')
+    expect(corsOrigin('prod', 'https://kortebaan.aintern.nl')).toBe('https://kortebaan.aintern.nl')
   })
 
   it('never lets prod answer localhost or the test site', () => {
     expect(corsOrigin('prod', 'http://localhost:5173')).toBe('https://kortebaan.nl')
     expect(corsOrigin('prod', 'https://test.kortebaan.nl')).toBe('https://kortebaan.nl')
+    expect(corsOrigin('prod', 'https://test.kortebaan.aintern.nl')).toBe('https://kortebaan.nl')
   })
 
   it('serves both the test site and localhost on dev', () => {

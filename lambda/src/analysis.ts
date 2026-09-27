@@ -27,8 +27,9 @@ import {
   putChat,
   putDraverij,
 } from './lib/analysisStore'
+import { claimAiRun, nextThinkingSince } from './lib/aiAccess'
 import { authenticate } from './lib/session'
-import { dayOf, getAiConfig, incrementUsage, usageOn, type UserRecord } from './lib/store'
+import { dayOf, type UserRecord } from './lib/store'
 import { startWorker } from './lib/worker'
 
 const MAX_PLACE_LENGTH = 40
@@ -48,32 +49,9 @@ async function view(req: RouteRequest, chat: ChatRecord) {
 // Checks the AI connection and the friend's daily limit, counts the chat for today,
 // then hands the turn to the worker
 async function startTurn(req: RouteRequest, user: UserRecord, chat: ChatRecord): Promise<ChatRecord> {
-  const config = await getAiConfig(req.alias)
-  if (!config) {
-    throw new HttpError(409, 'De AI is nog niet gekoppeld. Vraag de eigenaar om de AI-koppeling in te stellen.')
-  }
-  if (config.status !== 'connected') {
-    throw new HttpError(503, 'De AI-koppeling werkt op dit moment niet. De eigenaar is op de hoogte gebracht.')
-  }
+  chat.countedDay = await claimAiRun(req.alias, user, chat.countedDay)
 
-  const today = dayOf()
-  if (chat.countedDay !== today) {
-    if (user.role !== 'owner' && user.dailyLimit !== null) {
-      const used = (await usageOn(req.alias, today)).get(user.id) ?? 0
-      if (used >= user.dailyLimit) {
-        throw new HttpError(
-          429,
-          `Je hebt je daglimiet van ${user.dailyLimit} analyses bereikt. Morgen kun je weer verder.`,
-        )
-      }
-    }
-    await incrementUsage(req.alias, today, user.id)
-    chat.countedDay = today
-  }
-
-  // thinkingSince identifies the turn for the worker, so it must never repeat
-  const previous = chat.thinkingSince ? Date.parse(chat.thinkingSince) : 0
-  const now = new Date(Math.max(Date.now(), previous + 1)).toISOString()
+  const now = nextThinkingSince(chat.thinkingSince)
   const started: ChatRecord = { ...chat, status: 'thinking', error: undefined, thinkingSince: now, updatedAt: now }
   await putChat(req.alias, started)
   try {
