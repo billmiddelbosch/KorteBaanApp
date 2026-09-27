@@ -8,7 +8,7 @@ test.describe('Mock API (MSW)', () => {
   // The app mounts only after worker.start() resolves, so a mounted app means MSW is active
   const openApp = async (page: Page) => {
     await page.goto('/')
-    await expect(page.locator('#app header')).toBeVisible()
+    await expect(page.locator('#app main')).toBeVisible()
   }
 
   const getMe = (key: string) =>
@@ -28,13 +28,13 @@ test.describe('Mock API (MSW)', () => {
     await openApp(page)
     const res = await page.evaluate(getMe, AUTH_TOKEN_KEY)
     expect(res.status).toBe(200)
-    expect(res.body.role).toBe('user')
+    expect(res.body.role).toBe('friend')
   })
 
-  test('returns the admin for an admin session', async ({ page, loginAs }) => {
+  test('returns the owner for an admin session', async ({ page, loginAs }) => {
     await loginAs('admin')
     await openApp(page)
     const res = await page.evaluate(getMe, AUTH_TOKEN_KEY)
-    expect(res.body.role).toBe('admin')
+    expect(res.body.role).toBe('owner')
   })
 })

@@ -64,7 +64,7 @@ Branch flow: `feature/<name>` → PR → `main` → PR `main` → `staging` → 
   const requestOrigin = requestOriginOf(event)
   return respond(200, body, alias, requestOrigin)
   ```
-  Pass `requestOrigin` to **every** `respond()` call. `dev` serves `test.kortebaan.nl` + `localhost:5173`; `prod` serves `kortebaan.nl` + `www.kortebaan.nl`.
+  Pass `requestOrigin` to **every** `respond()` call. `dev` serves `test.kortebaan.nl` + `localhost:5173`; `prod` serves `kortebaan.nl` + `www.kortebaan.nl` (and the `kortebaan.aintern.nl` equivalents).
 - When adding a domain/origin, update both `lambda/src/lib/http.ts` and `ALLOWED_ORIGINS` in `infra/lib/config.ts`.
 - Per-environment resources (tables, buckets, secrets) are separate for dev and prod; the handler picks one based on `aliasOf(context)`.
 - `lambda/tsconfig.json` is for type-checking only; the build is esbuild.

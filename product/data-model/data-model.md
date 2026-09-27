@@ -1,0 +1,80 @@
+# Data Model
+
+## Entities
+
+### Gebruiker
+De eigenaar of een vriend met een eigen account, eigen speelsessies en eigen historie.
+
+### Draverij
+Een kortebaandraverij op een plaats en datum. Bij elke draverij vindt een verse AI-analyse plaats op basis van de meest recente online data.
+
+### Omloop
+Een ronde binnen een draverij (bijv. 1e omloop, herkansing, finale). Voor elke omloop vindt opnieuw een AI-analyse plaats met de actuele stand, uitslagen en quota's.
+
+### Koppel
+Twee deelnames die in een omloop tegen elkaar lopen, met de winnaar als uitslag. De koppels van een omloop volgen uit de loting.
+
+### Paard
+Een draver waarvan prestaties over draverijen heen worden gevolgd.
+
+### Pikeur
+De menner van een paard.
+
+### Stal
+De eigenaar- of trainingsstal van een paard. Wordt per deelname vastgelegd zoals de bron die op dat moment vermeldt; verbanden tussen stal, paard en pikeur leidt de AI zelf af.
+
+### Deelname
+De start van een paard in een draverij, met de pikeur en stal van dat moment.
+
+### Loting
+De indeling van de koppels voor een omloop, bekendgemaakt na afloop van de vorige omloop. Wordt na elke omloop automatisch online opgehaald, en kan altijd door de gebruiker via een foto worden geüpload die de AI uitleest — ook als er al een online loting is, bijvoorbeeld omdat die ontbreekt, te laat komt of afwijkt.
+
+### Quota
+Een momentopname van de quota's in een omloop, automatisch opgehaald of uitgelezen van een door de gebruiker geüploade foto.
+
+### Analysechat
+Het gesprek van een gebruiker met de AI vóór een draverij, gericht op een inzetadvies. Eén per gebruiker per draverij; blijft beschikbaar tot de draverij voorbij is en verdwijnt daarna, het vastgelegde advies blijft.
+
+### AI-instructie
+Het vaste deel van de opdracht aan de AI (rol, werkwijze), beheerd door de eigenaar, met eerdere versies om naar terug te zetten.
+
+### Analyse
+Een AI-analyse van een draverij of omloop, uitgevoerd op het moment zelf met de meest recente online data. Opgeslagen data en lessen zijn aanvullende input, maar vervangen de actuele analyse nooit.
+
+### Speelsessie
+De koersdag van een gebruiker bij een draverij, met het vooraf opgegeven budget.
+
+### Advies
+De inzet-suggestie van de AI voor een omloop binnen een speelsessie, gebaseerd op een analyse en het resterende budget, met onderbouwing.
+
+### Weddenschap
+De werkelijke inzet van een gebruiker en het resultaat daarvan.
+
+### Les
+Een inzicht in het gedeelde kennissysteem, vastgelegd na evaluatie van advies versus uitkomst. Heeft een vrij onderwerp en kan gaan over paarden, pikeurs, stallen, draverijen, adviesstrategie of overige zaken.
+
+### Bron
+Een online bron waar de AI-agent data vandaan heeft gehaald, zodat herkomst en actualiteit controleerbaar zijn.
+
+## Relationships
+
+- Draverij has many Omloop
+- Omloop has one Loting (the latest, from online or photo)
+- Loting determines the Koppel of its Omloop
+- Omloop has many Koppel
+- Draverij has many Deelname
+- Deelname belongs to Paard, Pikeur and Stal
+- Koppel links two Deelname
+- Omloop has many Quota
+- Draverij and Omloop each have many Analyse (a fresh one per draverij and per omloop)
+- Analyse uses Deelname, Loting, Quota, Les and Bron as input
+- Gebruiker has many Analysechat (one per Draverij)
+- Analysechat belongs to Draverij and uses the current AI-instructie, Les and Bron
+- Analysechat produces an Advies that becomes the starting point of the Speelsessie for that Draverij
+- Gebruiker has many Speelsessie
+- Speelsessie belongs to Draverij
+- Speelsessie has many Advies (one or more per Omloop) and many Weddenschap
+- Advies belongs to Analyse
+- Weddenschap optionally belongs to Advies
+- Les optionally references Paard, Pikeur, Stal, Draverij or Advies (or none, for general lessons)
+- Draverij, Deelname, Loting, Quota, Analyse and Les reference one or more Bron (an uploaded photo counts as a source for Loting and Quota)

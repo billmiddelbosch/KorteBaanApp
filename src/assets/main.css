@@ -1,36 +1,26 @@
 @import 'tailwindcss';
-@import './base.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
 
-#app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  font-weight: normal;
+/* Dark mode follows the `dark` class on <html>, set by useTheme (light / dark / auto) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens — see product/design-system: primary blue, secondary amber, neutral slate */
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
 }
 
-a,
-.green {
-  text-decoration: none;
-  color: hsla(160, 100%, 37%, 1);
-  transition: 0.4s;
-  padding: 3px;
-}
-
-@media (hover: hover) {
-  a:hover {
-    background-color: hsla(160, 100%, 37%, 0.2);
+@layer base {
+  html {
+    color-scheme: light;
   }
-}
 
-@media (min-width: 1024px) {
+  html.dark {
+    color-scheme: dark;
+  }
+
   body {
-    display: flex;
-    place-items: center;
-  }
-
-  #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
+    @apply bg-slate-50 font-sans text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
   }
 }
