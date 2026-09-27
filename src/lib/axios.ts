@@ -12,10 +12,20 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+let unauthorizedHandler: (() => void) | null = null
+
+// Lets the auth store react to an expired session without a circular import
+export function onUnauthorized(handler: () => void) {
+  unauthorizedHandler = handler
+}
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) localStorage.removeItem(AUTH_TOKEN_KEY)
+    if (error.response?.status === 401) {
+      localStorage.removeItem(AUTH_TOKEN_KEY)
+      unauthorizedHandler?.()
+    }
     return Promise.reject(error)
   },
 )
