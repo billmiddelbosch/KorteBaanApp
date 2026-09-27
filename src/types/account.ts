@@ -55,6 +55,8 @@ export interface PlaySession {
   staked: number
   paidOut: number
   balance: number
+  // Terugblik: the AI evaluated this koersdag
+  evaluated?: boolean
 }
 
 export interface SessionsOverview {

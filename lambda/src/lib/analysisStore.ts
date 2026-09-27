@@ -1,6 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
 import {
   BatchWriteCommand,
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -173,4 +174,27 @@ export async function saveKnowledge(
       }),
     )
   }
+}
+
+// Lessons from Terugblik; the AI reads the newest ones via listLessons
+export async function saveLessons(alias: Alias, lessons: Lesson[]): Promise<void> {
+  const TableName = tableName(alias)
+  const items = lessons.map((l) => ({ pk: 'KB', sk: `LESSON#${l.createdAt}#${l.id}`, ...l }))
+  for (let i = 0; i < items.length; i += 25) {
+    await doc.send(
+      new BatchWriteCommand({
+        RequestItems: { [TableName]: items.slice(i, i + 25).map((Item) => ({ PutRequest: { Item } })) },
+      }),
+    )
+  }
+}
+
+// Returns false when the lesson doesn't exist (anymore)
+export async function deleteLesson(alias: Alias, id: string): Promise<boolean> {
+  const lesson = (await query<Lesson>(alias, 'KB', 'LESSON#')).find((l) => l.id === id)
+  if (!lesson) return false
+  await doc.send(
+    new DeleteCommand({ TableName: tableName(alias), Key: { pk: 'KB', sk: `LESSON#${lesson.createdAt}#${lesson.id}` } }),
+  )
+  return true
 }

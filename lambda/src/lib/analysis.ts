@@ -80,6 +80,10 @@ export interface Lesson {
   id: string
   text: string
   createdAt: string
+  // Bron-koersdag (Terugblik)
+  draverijId?: string
+  place?: string
+  date?: string
 }
 
 export const MAX_MESSAGE_LENGTH = 2000
