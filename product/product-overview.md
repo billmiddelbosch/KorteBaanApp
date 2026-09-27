@@ -8,8 +8,8 @@ Sprintorakel is een webapp die je vóór en tijdens kortebaandraverijen weddensc
 ### Problem 1: Versnipperde informatie over kortebaan
 De AI-agent zoekt zelf online naar historische uitslagen, paarden, pikeurs en quota's, en slaat bruikbare data op voor gebruik vóór en tijdens de koers.
 
-### Problem 2: Quota's veranderen per omloop
-Quota's worden automatisch opgehaald; na elke omloop kan de gebruiker een foto van het actuele quotabord uploaden, die de AI uitleest en meeneemt in het advies.
+### Problem 2: Quota's en loting veranderen per omloop
+Quota's worden automatisch opgehaald; na elke omloop kan de gebruiker een foto van het actuele quotabord uploaden, die de AI uitleest en meeneemt in het advies. Na elke omloop wordt ook de loting (de koppels) voor de volgende omloop online opgehaald, en de gebruiker kan die altijd via een foto uploaden — ook als de online loting al beschikbaar is.
 
 ### Problem 3: Onderbuikgevoel in plaats van onderbouwde keuzes
 De gebruiker geeft vooraf een budget op; de AI weegt alle inzetopties af en geeft per omloop een concrete, onderbouwde inzet-suggestie.
@@ -24,6 +24,7 @@ Elke gebruiker heeft een eigen account met eigen budget, adviezen en historie, t
 - AI-agent die zelfstandig online historische data en quota's zoekt en analyseert
 - Opslag van relevante historische data voor snel gebruik vóór en tijdens de koers
 - Automatisch ophalen van quota's, plus foto-upload van het quotabord na elke omloop
+- Na elke omloop de loting voor de volgende omloop online ophalen, en altijd via een foto kunnen uploaden
 - Budget vooraf opgeven en inzet-suggestie per omloop, met alle inzetopties afgewogen
 - Resultaten terugkoppelen en AI-evaluatie van advies versus uitkomst
 - Groeiend kennissysteem met lessen als aanvullende bron voor nieuw advies

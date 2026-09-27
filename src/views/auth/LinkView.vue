@@ -18,7 +18,8 @@ const USERNAME_PATTERN = /^[a-z0-9._-]{3,30}$/
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const token = computed(() => String(route.params.token ?? ''))
+// Tokens are base64url; drop punctuation that sticks to links pasted from chat messages
+const token = computed(() => String(route.params.token ?? '').replace(/[^A-Za-z0-9_-]+$/, ''))
 
 const info = ref<LinkInfo | null>(null)
 const state = ref<'loading' | 'ready' | 'gone' | 'error'>('loading')
