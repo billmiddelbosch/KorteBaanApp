@@ -52,3 +52,6 @@ playwright-report/
 # Deploy build output
 lambda/dist/
 infra/cdk.out/
+
+# Lambda one-off script bundles
+lambda/.scripts

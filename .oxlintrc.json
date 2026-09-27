@@ -16,6 +16,7 @@
   },
   "ignorePatterns": [
     "infra/cdk.out/**",
-    "**/dist/**"
+    "**/dist/**",
+    "lambda/.scripts/**"
   ]
 }

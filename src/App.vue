@@ -1,85 +1,75 @@
 <script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router'
-import HelloWorld from './components/HelloWorld.vue'
+import { computed, watch } from 'vue'
+import { RouterView, useRoute, useRouter } from 'vue-router'
+import { ChartLine, Flag, MessageSquareText } from '@lucide/vue'
+import AiNotice from '@/components/account/AiNotice.vue'
+import { AppShell, type LiveSession, type NavItem, type ShellUser } from '@/components/shell'
+import { useAuthStore } from '@/stores/auth'
+
+const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
+
+const navigationItems: NavItem[] = [
+  { label: 'Koersdag', to: '/', icon: Flag },
+  { label: 'Analyse', to: '/analyse', icon: MessageSquareText },
+  { label: 'Terugblik', to: '/terugblik', icon: ChartLine },
+]
+
+const shellUser = computed<ShellUser | null>(() => {
+  const me = auth.user
+  if (!me) return null
+  return {
+    name: me.name,
+    isOwner: me.role === 'owner',
+    aiStatus: me.ai.status === 'none' ? undefined : me.ai.status,
+  }
+})
+
+// Sample data until the Koersdag section provides the real running session
+const liveSession: LiveSession = {
+  draverij: 'Wolvega',
+  omloop: '2e omloop',
+  budgetRemaining: 35,
+  to: '/',
+}
+
+// Wait for the first navigation so the shell doesn't flash on the login page
+const ready = computed(() => route.matched.length > 0)
+const standalone = computed(() => !!route.meta.standalone)
+
+let loggingOut = false
+
+async function handleLogout() {
+  loggingOut = true
+  auth.logout()
+  await router.push({ name: 'inloggen' })
+  loggingOut = false
+}
+
+// Session ended mid-use (expired, password reset elsewhere, access paused)
+watch(
+  () => auth.user,
+  (user) => {
+    if (!user && !loggingOut && ready.value && !route.meta.public) {
+      router.replace({ name: 'inloggen', query: { redirect: route.fullPath } })
+    }
+  },
+)
 </script>
 
 <template>
-  <header>
-    <img alt="Vue logo" class="logo" src="@/assets/logo.svg" width="125" height="125" />
-
-    <div class="wrapper">
-      <HelloWorld msg="You did it!" />
-
-      <nav>
-        <RouterLink to="/">Home</RouterLink>
-        <RouterLink to="/about">About</RouterLink>
-      </nav>
-    </div>
-  </header>
-
-  <RouterView />
+  <template v-if="ready">
+    <RouterView v-if="standalone || !shellUser" />
+    <AppShell
+      v-else
+      :navigation-items="navigationItems"
+      :user="shellUser"
+      :live-session="liveSession"
+      @logout="handleLogout"
+    >
+      <AiNotice :me="auth.user!" />
+      <RouterView />
+    </AppShell>
+  </template>
 </template>
-
-<style scoped>
-header {
-  line-height: 1.5;
-  max-height: 100vh;
-}
-
-.logo {
-  display: block;
-  margin: 0 auto 2rem;
-}
-
-nav {
-  width: 100%;
-  font-size: 12px;
-  text-align: center;
-  margin-top: 2rem;
-}
-
-nav a.router-link-exact-active {
-  color: var(--color-text);
-}
-
-nav a.router-link-exact-active:hover {
-  background-color: transparent;
-}
-
-nav a {
-  display: inline-block;
-  padding: 0 1rem;
-  border-left: 1px solid var(--color-border);
-}
-
-nav a:first-of-type {
-  border: 0;
-}
-
-@media (min-width: 1024px) {
-  header {
-    display: flex;
-    place-items: center;
-    padding-right: calc(var(--section-gap) / 2);
-  }
-
-  .logo {
-    margin: 0 2rem 0 0;
-  }
-
-  header .wrapper {
-    display: flex;
-    place-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  nav {
-    text-align: left;
-    margin-left: -1rem;
-    font-size: 1rem;
-
-    padding: 1rem 0;
-    margin-top: 1rem;
-  }
-}
-</style>

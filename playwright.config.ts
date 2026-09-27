@@ -109,5 +109,7 @@ export default defineConfig({
     command: `npm run dev -- --port ${E2E_PORT} --strictPort`,
     port: E2E_PORT,
     reuseExistingServer: !process.env.CI,
+    // Overrides a local .env.local that points `npm run dev` at a real API
+    env: { VITE_USE_MOCKS: 'true', API_PROXY_TARGET: '' },
   },
 })
