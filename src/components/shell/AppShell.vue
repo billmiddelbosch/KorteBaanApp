@@ -16,7 +16,11 @@ const emit = defineEmits<{ logout: [] }>()
 </script>
 
 <template>
-  <div class="min-h-dvh md:flex">
+  <!-- --shell-bottom: height of the phone bottom bar, so sticky page footers can sit above it -->
+  <div
+    class="min-h-dvh md:flex"
+    :style="{ '--shell-bottom': liveSession ? '6.75rem' : '4rem' }"
+  >
     <aside
       class="sticky top-0 hidden h-dvh w-18 shrink-0 flex-col gap-6 border-r border-slate-200 bg-white px-3 py-4 md:flex lg:w-64 lg:px-4 dark:border-white/10 dark:bg-slate-900"
     >
@@ -38,12 +42,7 @@ const emit = defineEmits<{ logout: [] }>()
       <LiveBar v-if="liveSession" :session="liveSession" class="sticky top-0 z-30 hidden md:flex" />
 
       <main
-        :class="[
-          'flex-1 md:pb-0',
-          liveSession
-            ? 'pb-[calc(6.75rem+env(safe-area-inset-bottom))]'
-            : 'pb-[calc(4rem+env(safe-area-inset-bottom))]',
-        ]"
+        class="flex-1 pb-[calc(var(--shell-bottom)+env(safe-area-inset-bottom))] md:pb-0"
       >
         <slot />
       </main>

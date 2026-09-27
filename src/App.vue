@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
-import { ChartLine, Flag, History } from '@lucide/vue'
+import { ChartLine, Flag, MessageSquareText } from '@lucide/vue'
 import AiNotice from '@/components/account/AiNotice.vue'
 import { AppShell, type LiveSession, type NavItem, type ShellUser } from '@/components/shell'
 import { useAuthStore } from '@/stores/auth'
@@ -12,7 +12,7 @@ const auth = useAuthStore()
 
 const navigationItems: NavItem[] = [
   { label: 'Koersdag', to: '/', icon: Flag },
-  { label: 'Historie', to: '/historie', icon: History },
+  { label: 'Analyse', to: '/analyse', icon: MessageSquareText },
   { label: 'Terugblik', to: '/terugblik', icon: ChartLine },
 ]
 

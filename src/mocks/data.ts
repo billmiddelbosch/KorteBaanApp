@@ -3,6 +3,7 @@
 // The state lives in the page, so every reload (and every Playwright test) starts fresh.
 
 import type { AiConnection, LinkType, PlaySession, Role } from '@/types/account'
+import type { Chat, Draverij, LockedAdvice } from '@/types/analyse'
 
 // Fake, dev-only values. Grouped under neutral keys so secret scanners don't mistake them
 // for real credentials.
@@ -158,4 +159,78 @@ export function userForLink(token: string): MockUser | undefined {
 
 export function newLinkToken(): string {
   return `mock-link-${Math.random().toString(36).slice(2, 12)}`
+}
+
+// ── Analyse ───────────────────────────────────────────────────────────────
+
+// Mock AI chats per user, keyed `${userId}/${draverijId}`. Draverij dates are relative to today,
+// so their IDs change daily; E2E specs find them by place name.
+export interface MockChat {
+  userId: string
+  countedDay: string | null
+  // Identifies the pending AI turn, so a restart drops the old answer
+  turn?: string
+  chat: Chat
+}
+
+const dayFromNow = (days: number) => new Date(now + days * DAY).toISOString().slice(0, 10)
+const draverij = (place: string, days: number): Draverij => {
+  const date = dayFromNow(days)
+  return { id: `${date}-${place.toLowerCase()}`, place, date }
+}
+
+export const WOLVEGA = draverij('Wolvega', 6)
+export const HOLLANDSCHEVELD = draverij('Hollandscheveld', 13)
+export const SCHAGEN = draverij('Schagen', 20)
+
+export const MOCK_DEFAULT_INSTRUCTION = `Je bent expert op het gebied van kortebaandraverijen in Nederland. Je volgt meerjarig alle uitslagen en zoekt verbanden in hoe koersen gelopen en gewonnen worden: paarden, pikeurs, stallen, de baan en de omstandigheden. In je kansbepaling neem je ook de meest recente uitslagen en berichtgeving mee.
+
+Werkwijze:
+- Stel eerst een paar korte vragen: wat is het budget, hoeveel risico wil de gebruiker nemen, en zijn er paarden of pikeurs die extra meegewogen moeten worden?
+- Zoek online naar het deelnemersveld, recente uitslagen en berichtgeving over deze draverij.
+- Weeg alle inzetopties af binnen het budget en onderbouw elke keuze kort en concreet.
+- Wees eerlijk over onzekerheid en zeg het als informatie ontbreekt of verouderd is.
+- Schrijf in het Nederlands, kort en helder: de gebruiker leest op de telefoon.`
+
+export const analyseDb: {
+  draverijen: Draverij[]
+  chats: Record<string, MockChat>
+  advice: Record<string, LockedAdvice>
+  instruction: { text: string; updatedAt: string | null; previous: string | null }
+} = {
+  draverijen: [WOLVEGA, HOLLANDSCHEVELD, SCHAGEN],
+  chats: {
+    [`user-1/${WOLVEGA.id}`]: {
+      userId: 'user-1',
+      countedDay: null,
+      chat: {
+        id: WOLVEGA.id,
+        draverij: WOLVEGA,
+        status: 'idle',
+        error: null,
+        advice: null,
+        updatedAt: ago(3 * 60 * 60 * 1000),
+        messages: [
+          {
+            id: 'm-wolvega-1',
+            role: 'user',
+            text: `Ik wil een inzetadvies voor de kortebaan in Wolvega.`,
+            sources: [],
+            proposal: null,
+            createdAt: ago(3 * 60 * 60 * 1000 + 60_000),
+          },
+          {
+            id: 'm-wolvega-2',
+            role: 'assistant',
+            text: 'Leuk, Wolvega! Voordat ik ga zoeken: wat is je budget voor de dag, en speel je liever op zeker of mag er wat risico in?',
+            sources: [],
+            proposal: null,
+            createdAt: ago(3 * 60 * 60 * 1000),
+          },
+        ],
+      },
+    },
+  },
+  advice: {},
+  instruction: { text: MOCK_DEFAULT_INSTRUCTION, updatedAt: null, previous: null },
 }

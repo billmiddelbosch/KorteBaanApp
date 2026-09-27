@@ -317,7 +317,7 @@ onMounted(load)
       @cancel="confirmOpen = false"
     >
       <p>
-        AI-advies stopt direct voor jou en al je vrienden. Historie en eerdere adviezen blijven
+        AI-advies stopt direct voor jou en al je vrienden. Eerdere adviezen en resultaten blijven
         bewaard.
       </p>
       <AlertBox v-if="deleteError" class="mt-3">{{ deleteError }}</AlertBox>

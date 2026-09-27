@@ -22,9 +22,9 @@ test.describe('App shell', () => {
     test('navigates between sections', async ({ page }) => {
       await page.goto('/')
       const nav = page.getByRole('navigation', { name: 'Hoofdnavigatie' })
-      await nav.getByRole('link', { name: 'Historie' }).click()
-      await expect(page).toHaveURL(/\/historie$/)
-      await expect(nav.getByRole('link', { name: 'Historie' })).toHaveAttribute(
+      await nav.getByRole('link', { name: 'Analyse' }).click()
+      await expect(page).toHaveURL(/\/analyse$/)
+      await expect(nav.getByRole('link', { name: 'Analyse' })).toHaveAttribute(
         'aria-current',
         'page',
       )
@@ -63,7 +63,7 @@ test.describe('App shell', () => {
     test.use({ viewport: { width: 390, height: 844 } })
 
     test('shows the bottom tab bar and the live bar', async ({ page }) => {
-      await page.goto('/historie')
+      await page.goto('/analyse')
       const nav = page.getByRole('navigation', { name: 'Hoofdnavigatie' })
       await expect(nav.getByRole('link')).toHaveCount(3)
       await expect(page.getByRole('link', { name: /^Live:/ })).toBeVisible()

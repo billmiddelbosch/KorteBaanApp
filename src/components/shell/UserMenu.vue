@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, useId, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { Bot, LogOut, Monitor, Moon, Sun, User, Users } from '@lucide/vue'
+import { Bot, LogOut, Monitor, Moon, ScrollText, Sun, User, Users } from '@lucide/vue'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import type { ShellUser } from './types'
 
@@ -139,6 +139,12 @@ const itemClass =
                   ></span>
                   {{ user.aiStatus === 'connected' ? 'Gekoppeld' : 'Probleem' }}
                 </span>
+              </RouterLink>
+            </li>
+            <li>
+              <RouterLink to="/account/ai-instructie" :class="itemClass">
+                <ScrollText class="size-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+                AI-instructie
               </RouterLink>
             </li>
           </template>

@@ -42,3 +42,22 @@ export function formatRelative(iso: string, now = Date.now()): string {
   if (days < 14) return `${days} dagen geleden`
   return formatDate(iso)
 }
+
+// Date-only strings (2026-10-03): noon avoids slipping a day across time zones
+export function formatDay(date: string, withYear = false): string {
+  return new Intl.DateTimeFormat('nl-NL', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    ...(withYear ? { year: 'numeric' } : {}),
+  }).format(new Date(`${date}T12:00:00`))
+}
+
+// "vandaag", "morgen", "over 6 dagen"
+export function daysUntil(date: string, now = new Date()): string {
+  const today = Date.parse(`${now.toISOString().slice(0, 10)}T12:00:00`)
+  const days = Math.round((Date.parse(`${date}T12:00:00`) - today) / 86_400_000)
+  if (days <= 0) return 'vandaag'
+  if (days === 1) return 'morgen'
+  return `over ${days} dagen`
+}

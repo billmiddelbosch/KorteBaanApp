@@ -15,7 +15,8 @@ Iedereen heeft een eigen account met profiel en een overzicht van de eigen speel
 - Profiel bijwerken: naam en wachtwoord wijzigen
 - Mijn speelsessies: lijst per koersdag met totaalsaldo; tik op een sessie opent die in Terugblik
 - AI-koppeling (eigenaar): setup-token plakken of vervangen (met uitleg over `claude setup-token`; het token wordt daarna nooit meer volledig getoond), verbinding testen met een duidelijke foutmelding, verbruik per dag en per gebruiker inzien, koppeling verwijderen (bevestiging: AI wordt voor iedereen uitgeschakeld)
-- Limiet bereikt of koppelingsprobleem (vriend): melding met uitleg en wanneer het weer beschikbaar is; historie en eerdere adviezen blijven bruikbaar
+- AI-instructie (eigenaar): het vaste deel van de opdracht aan de AI bewerken, opslaan en terugzetten naar de vorige of standaardversie (zie Analyse)
+- Limiet bereikt of koppelingsprobleem (vriend): melding met uitleg en wanneer het weer beschikbaar is; eerdere adviezen en resultaten blijven bruikbaar
 
 ## UI Requirements
 - Mijn account: profielkaart en lijst speelsessies (datum, draverij, ingezet, uitbetaald, saldo) met het totaalsaldo bovenaan; winst in emerald en verlies in rood, altijd met een +/−-teken; bedragen in `tabular-nums`

@@ -44,7 +44,7 @@ export class ApiStack extends cdk.Stack {
           partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
           sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
           billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-          timeToLiveAttribute: 'expiresAt', // cleans up old invite/reset links
+          timeToLiveAttribute: 'expiresAt', // cleans up old links, usage counters and finished chats
           pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: env === 'prod' },
           removalPolicy: cdk.RemovalPolicy.RETAIN,
         }),
@@ -102,7 +102,31 @@ export class ApiStack extends cdk.Stack {
       CLAUDE_SECRET_ARN_PROD: claudeSecrets.prod.secretArn,
     })
 
-    const accountFunctions = [authFn, meFn, friendsFn, aiConnectionFn]
+    // Analyse: the API function stores the chat and hands each AI turn to the worker, which may
+    // search and think for minutes (longer than API Gateway's 29 s); the app polls for the reply.
+    const analysisWorkerFn = makeFn(
+      'AnalysisWorkerFunction',
+      'analysisWorker',
+      'analysisWorker.handler',
+      'Analyse: one AI turn (Claude + web search)',
+      {
+        memorySize: 512,
+        timeout: cdk.Duration.minutes(5),
+        environment: {
+          TABLE_DEV: tables.dev.tableName,
+          TABLE_PROD: tables.prod.tableName,
+          CLAUDE_SECRET_ARN_DEV: claudeSecrets.dev.secretArn,
+          CLAUDE_SECRET_ARN_PROD: claudeSecrets.prod.secretArn,
+        },
+      },
+    )
+    const analysisFn = accountFn('AnalysisFunction', 'analysis', 'Analyse chats and locked advice', {
+      ...accountEnv,
+      ANALYSIS_WORKER_NAME: analysisWorkerFn.functionName,
+    })
+    const aiInstructionFn = accountFn('AiInstructionFunction', 'aiInstruction', 'Owner: AI-instructie')
+
+    const accountFunctions = [authFn, meFn, friendsFn, aiConnectionFn, analysisFn, aiInstructionFn]
     for (const fn of accountFunctions) {
       for (const env of envs) {
         tables[env].grantReadWriteData(fn)
@@ -113,6 +137,14 @@ export class ApiStack extends cdk.Stack {
     for (const env of envs) {
       claudeSecrets[env].grantRead(aiConnectionFn)
       claudeSecrets[env].grantWrite(aiConnectionFn)
+    }
+
+    // The worker isn't behind API Gateway; it gets its own aliases, invoked by the analysis function.
+    // No retries: a retried turn would answer twice, and the worker records its own failures.
+    for (const env of envs) {
+      tables[env].grantReadWriteData(analysisWorkerFn)
+      claudeSecrets[env].grantRead(analysisWorkerFn)
+      analysisWorkerFn.addAlias(env, { retryAttempts: 0 }).grantInvoke(analysisFn)
     }
 
     const functions = [healthFn, ...accountFunctions]
@@ -165,6 +197,17 @@ export class ApiStack extends cdk.Stack {
       ['PUT', '/ai-connection', aiConnectionFn],
       ['DELETE', '/ai-connection', aiConnectionFn],
       ['POST', '/ai-connection/test', aiConnectionFn],
+      ['GET', '/ai-instruction', aiInstructionFn],
+      ['PUT', '/ai-instruction', aiInstructionFn],
+      ['POST', '/ai-instruction/revert', aiInstructionFn],
+      ['GET', '/draverijen', analysisFn],
+      ['GET', '/analyses', analysisFn],
+      ['POST', '/analyses', analysisFn],
+      ['GET', '/analyses/{id}', analysisFn],
+      ['POST', '/analyses/{id}/messages', analysisFn],
+      ['POST', '/analyses/{id}/retry', analysisFn],
+      ['POST', '/analyses/{id}/restart', analysisFn],
+      ['POST', '/analyses/{id}/advice', analysisFn],
     ]
     const methods = routes.map(([method, route, fn]) =>
       api.root.resourceForPath(route).addMethod(method, aliasIntegration(fn)),
