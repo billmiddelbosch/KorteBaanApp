@@ -2,8 +2,17 @@ import type { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-l
 
 // Allowed browser origins per Lambda alias.
 // Keep in sync with the API Gateway preflight list in infra/lib/config.ts (ALLOWED_ORIGINS).
-const PROD_ORIGINS = new Set(['https://kortebaan.nl', 'https://www.kortebaan.nl'])
-const DEV_ORIGINS = new Set(['https://test.kortebaan.nl', 'http://localhost:5173'])
+const PROD_ORIGINS = new Set([
+  'https://kortebaan.nl',
+  'https://www.kortebaan.nl',
+  'https://kortebaan.aintern.nl',
+  'https://www.kortebaan.aintern.nl',
+])
+const DEV_ORIGINS = new Set([
+  'https://test.kortebaan.nl',
+  'https://test.kortebaan.aintern.nl',
+  'http://localhost:5173',
+])
 
 export type Alias = 'dev' | 'prod'
 

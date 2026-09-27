@@ -260,6 +260,15 @@ export async function listSessions(alias: Alias, userId: string): Promise<Sessio
   return (res.Items ?? []).map((item) => strip<SessionRecord>(item)!)
 }
 
+export async function putSession(alias: Alias, userId: string, session: SessionRecord): Promise<void> {
+  await doc.send(
+    new PutCommand({
+      TableName: tableName(alias),
+      Item: { pk: `USER#${userId}`, sk: `SESSION#${session.date}#${session.id}`, ...session },
+    }),
+  )
+}
+
 // ── AI config ────────────────────────────────────────────────────────────
 
 const aiKey = { pk: 'CONFIG', sk: 'AI' }

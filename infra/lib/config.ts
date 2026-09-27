@@ -7,6 +7,9 @@ export const REGION = 'eu-west-2'
 export const ALLOWED_ORIGINS = [
   'https://kortebaan.nl',
   'https://www.kortebaan.nl',
+  'https://kortebaan.aintern.nl',
+  'https://www.kortebaan.aintern.nl',
   'https://test.kortebaan.nl',
+  'https://test.kortebaan.aintern.nl',
   'http://localhost:5173',
 ]

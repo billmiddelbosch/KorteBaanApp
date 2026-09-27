@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, onUnauthorized } from '@/lib/axios'
 import { AUTH_TOKEN_KEY } from '@/lib/constants'
-import { errorMessage, errorStatus } from '@/lib/errors'
+import { errorMessage, errorStatus, UserFacingError } from '@/lib/errors'
 import type { AuthResponse, Me } from '@/types/account'
 
 function readToken(): string | null {
@@ -36,6 +36,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function applySession(res: AuthResponse) {
+    // A misconfigured API URL gets index.html back with 200: fail instead of silently staying logged out
+    if (typeof res?.token !== 'string' || !res.user) {
+      throw new UserFacingError('De server gaf een onverwacht antwoord. Probeer het later opnieuw.')
+    }
     setToken(res.token)
     user.value = res.user
     notice.value = null

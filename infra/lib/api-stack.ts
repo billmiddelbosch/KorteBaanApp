@@ -3,6 +3,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
+import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager'
 import { Construct } from 'constructs'
 import * as path from 'path'
@@ -77,6 +78,25 @@ export class ApiStack extends cdk.Stack {
       ]),
     ) as Record<(typeof envs)[number], secretsmanager.Secret>
 
+    // Koersdag photos: only kept until the worker has checked them; the lifecycle rule is a backstop
+    const photoBuckets = Object.fromEntries(
+      envs.map((env) => [
+        env,
+        new s3.Bucket(this, `PhotoBucket-${env}`, {
+          blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+          encryption: s3.BucketEncryption.S3_MANAGED,
+          enforceSSL: true,
+          lifecycleRules: [{ expiration: cdk.Duration.days(1) }],
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+          autoDeleteObjects: true,
+        }),
+      ]),
+    ) as Record<(typeof envs)[number], s3.Bucket>
+    const photoEnv = {
+      PHOTO_BUCKET_DEV: photoBuckets.dev.bucketName,
+      PHOTO_BUCKET_PROD: photoBuckets.prod.bucketName,
+    }
+
     const accountEnv = {
       TABLE_DEV: tables.dev.tableName,
       TABLE_PROD: tables.prod.tableName,
@@ -126,7 +146,31 @@ export class ApiStack extends cdk.Stack {
     })
     const aiInstructionFn = accountFn('AiInstructionFunction', 'aiInstruction', 'Owner: AI-instructie')
 
-    const accountFunctions = [authFn, meFn, friendsFn, aiConnectionFn, analysisFn, aiInstructionFn]
+    // Koersdag: same pattern as Analyse; one worker run per omloop update (online check or photo)
+    const koersdagWorkerFn = makeFn(
+      'KoersdagWorkerFunction',
+      'koersdagWorker',
+      'koersdagWorker.handler',
+      'Koersdag: one update per omloop (Claude + web search / photo)',
+      {
+        memorySize: 512,
+        timeout: cdk.Duration.minutes(5),
+        environment: {
+          TABLE_DEV: tables.dev.tableName,
+          TABLE_PROD: tables.prod.tableName,
+          CLAUDE_SECRET_ARN_DEV: claudeSecrets.dev.secretArn,
+          CLAUDE_SECRET_ARN_PROD: claudeSecrets.prod.secretArn,
+          ...photoEnv,
+        },
+      },
+    )
+    const koersdagFn = accountFn('KoersdagFunction', 'koersdag', 'Koersdag: updates per omloop, inzetten', {
+      ...accountEnv,
+      ...photoEnv,
+      KOERSDAG_WORKER_NAME: koersdagWorkerFn.functionName,
+    })
+
+    const accountFunctions = [authFn, meFn, friendsFn, aiConnectionFn, analysisFn, aiInstructionFn, koersdagFn]
     for (const fn of accountFunctions) {
       for (const env of envs) {
         tables[env].grantReadWriteData(fn)
@@ -145,6 +189,16 @@ export class ApiStack extends cdk.Stack {
       tables[env].grantReadWriteData(analysisWorkerFn)
       claudeSecrets[env].grantRead(analysisWorkerFn)
       analysisWorkerFn.addAlias(env, { retryAttempts: 0 }).grantInvoke(analysisFn)
+    }
+
+    for (const env of envs) {
+      tables[env].grantReadWriteData(koersdagWorkerFn)
+      claudeSecrets[env].grantRead(koersdagWorkerFn)
+      photoBuckets[env].grantPut(koersdagFn)
+      photoBuckets[env].grantDelete(koersdagFn)
+      photoBuckets[env].grantRead(koersdagWorkerFn)
+      photoBuckets[env].grantDelete(koersdagWorkerFn)
+      koersdagWorkerFn.addAlias(env, { retryAttempts: 0 }).grantInvoke(koersdagFn)
     }
 
     const functions = [healthFn, ...accountFunctions]
@@ -208,6 +262,16 @@ export class ApiStack extends cdk.Stack {
       ['POST', '/analyses/{id}/retry', analysisFn],
       ['POST', '/analyses/{id}/restart', analysisFn],
       ['POST', '/analyses/{id}/advice', analysisFn],
+      ['GET', '/koersdagen/today', koersdagFn],
+      ['POST', '/koersdagen', koersdagFn],
+      ['GET', '/koersdagen/{id}', koersdagFn],
+      ['POST', '/koersdagen/{id}/refresh', koersdagFn],
+      ['POST', '/koersdagen/{id}/photo', koersdagFn],
+      ['POST', '/koersdagen/{id}/next', koersdagFn],
+      ['POST', '/koersdagen/{id}/finish', koersdagFn],
+      ['POST', '/koersdagen/{id}/bets', koersdagFn],
+      ['PATCH', '/koersdagen/{id}/bets/{betId}', koersdagFn],
+      ['DELETE', '/koersdagen/{id}/bets/{betId}', koersdagFn],
     ]
     const methods = routes.map(([method, route, fn]) =>
       api.root.resourceForPath(route).addMethod(method, aliasIntegration(fn)),

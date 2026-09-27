@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "npm run bundle:health && npm run bundle:auth && npm run bundle:me && npm run bundle:friends && npm run bundle:aiConnection && npm run bundle:analysis && npm run bundle:analysisWorker && npm run bundle:aiInstruction",
+    "build": "npm run bundle:health && npm run bundle:auth && npm run bundle:me && npm run bundle:friends && npm run bundle:aiConnection && npm run bundle:analysis && npm run bundle:analysisWorker && npm run bundle:aiInstruction && npm run bundle:koersdag && npm run bundle:koersdagWorker",
     "test": "vitest run",
     "type-check": "tsc --noEmit",
     "bundle:health": "esbuild src/health.ts --bundle --platform=node --target=node22 --outfile=dist/health.js --external:@aws-sdk/*",
@@ -14,11 +14,14 @@
     "bundle:analysis": "esbuild src/analysis.ts --bundle --platform=node --target=node22 --outfile=dist/analysis.js --external:@aws-sdk/*",
     "bundle:analysisWorker": "esbuild src/analysisWorker.ts --bundle --platform=node --target=node22 --outfile=dist/analysisWorker.js --external:@aws-sdk/*",
     "bundle:aiInstruction": "esbuild src/aiInstruction.ts --bundle --platform=node --target=node22 --outfile=dist/aiInstruction.js --external:@aws-sdk/*",
+    "bundle:koersdag": "esbuild src/koersdag.ts --bundle --platform=node --target=node22 --outfile=dist/koersdag.js --external:@aws-sdk/*",
+    "bundle:koersdagWorker": "esbuild src/koersdagWorker.ts --bundle --platform=node --target=node22 --outfile=dist/koersdagWorker.js --external:@aws-sdk/*",
     "create-owner": "esbuild scripts/create-owner.ts --bundle --platform=node --target=node22 --outfile=.scripts/create-owner.js --external:@aws-sdk/* && node .scripts/create-owner.js"
   },
   "devDependencies": {
     "@aws-sdk/client-dynamodb": "^3.1141.0",
     "@aws-sdk/client-lambda": "^3.1141.0",
+    "@aws-sdk/client-s3": "^3.1141.0",
     "@aws-sdk/client-secrets-manager": "^3.1141.0",
     "@aws-sdk/lib-dynamodb": "^3.1141.0",
     "@types/aws-lambda": "^8.10.163",
