@@ -1,23 +1,33 @@
 import { http, HttpResponse, delay } from 'msw'
-import type { AiConnection, Friend, IssuedLink, LinkType, Me } from '@/types/account'
-import type { AiInstruction, Chat, ChatMessage, ChatSummary, Draverij, Source } from '@/types/analyse'
+import type { AiConnection, Friend, IssuedLink, LinkType, Me, PlaySession } from '@/types/account'
+import type {
+  AiInstruction,
+  Chat,
+  ChatMessage,
+  ChatSummary,
+  Draverij,
+  Source,
+} from '@/types/analyse'
 import type { Koersdag, KoersdagToday, KoersdagUpdate, UpdateKind } from '@/types/koersdag'
+import type { OmloopResult, ReviewStep, TerugblikDetail } from '@/types/terugblik'
 import {
   analyseDb,
   db,
   issueToken,
   koersdagDb,
+  terugblikDb,
   MOCK_DEFAULT_INSTRUCTION,
   newLinkToken,
   userForLink,
   userForToken,
   type MockChat,
   type MockKoersdag,
+  type MockReview,
   type MockUser,
 } from './data'
 
 // Mirrors the Lambda handlers in lambda/src (auth, me, friends, aiConnection, analysis,
-// aiInstruction, koersdag):
+// aiInstruction, koersdag, terugblik):
 // same routes, response shapes and Dutch messages.
 
 const BASE = '/api'
@@ -256,10 +266,16 @@ function mockReply(chat: Chat): ChatMessage | { error: string } {
 // AI connection and daily limit, like lambda/src/lib/aiAccess.ts; counted once per day per item
 function claimAiRun(user: MockUser, entry: { countedDay: string | null }): Response | null {
   if (db.ai.status === 'none') {
-    return fail(409, 'De AI is nog niet gekoppeld. Vraag de eigenaar om de AI-koppeling in te stellen.')
+    return fail(
+      409,
+      'De AI is nog niet gekoppeld. Vraag de eigenaar om de AI-koppeling in te stellen.',
+    )
   }
   if (db.ai.status !== 'connected') {
-    return fail(503, 'De AI-koppeling werkt op dit moment niet. De eigenaar is op de hoogte gebracht.')
+    return fail(
+      503,
+      'De AI-koppeling werkt op dit moment niet. De eigenaar is op de hoogte gebracht.',
+    )
   }
   const today = todayIso()
   if (entry.countedDay !== today) {
@@ -501,6 +517,192 @@ function openKoersdagFor(request: Request, id: unknown): KoersdagGuard {
   return guard
 }
 
+// ── Terugblik helpers ───────────────────────────────────────────────────
+
+const RESULTS_NOT_FOUND =
+  'De AI vond de uitslagen niet online. Vul ze zelf in of upload een foto van het uitslagbord.'
+const REVIEW_BUSY = 'De AI is nog bezig. Wacht even.'
+const MAX_OMLOPEN = 12
+const MAX_WINNER_LENGTH = 120
+const MAX_PLACES_LENGTH = 300
+const MOCK_WINNERS = ['Fleur de Lis', 'Beau Gamin', 'Oranje Boven', 'Zilvervos', 'Dolle Mina']
+
+function reviewOf(entry: MockKoersdag): MockReview {
+  const key = chatKey(entry.userId, entry.koersdag.id)
+  return (terugblikDb.reviews[key] ??= {
+    countedDay: null,
+    status: 'idle',
+    error: null,
+    step: null,
+    results: null,
+    resultsConfirmedAt: null,
+    evaluation: null,
+  })
+}
+
+function terugblikView(entry: MockKoersdag): TerugblikDetail {
+  const view = koersdagView(entry)
+  const review = reviewOf(entry)
+  return {
+    id: view.id,
+    draverij: view.draverij,
+    budget: view.budget,
+    staked: view.staked,
+    paidOut: view.paidOut,
+    balance: round2(view.paidOut - view.staked),
+    bets: view.bets,
+    finishedAt: view.finishedAt ?? view.updatedAt,
+    omloop: view.omloop,
+    status: review.status,
+    error: review.error,
+    step: review.step,
+    results: structuredClone(review.results),
+    resultsConfirmedAt: review.resultsConfirmedAt,
+    evaluation: structuredClone(review.evaluation),
+  }
+}
+
+// Keeps the speelsessie in step with the koersdag, like writeSession in the Lambda
+function writeSession(entry: MockKoersdag) {
+  const view = koersdagView(entry)
+  const sessions = (db.sessions[entry.userId] ??= [])
+  const session = {
+    id: view.draverij.id,
+    date: view.draverij.date,
+    draverij: view.draverij.place,
+    staked: view.staked,
+    paidOut: view.paidOut,
+    evaluated: !!reviewOf(entry).evaluation,
+  }
+  const index = sessions.findIndex((s) => s.id === session.id)
+  if (index >= 0) sessions[index] = session
+  else sessions.unshift(session)
+}
+
+// Canned AI: the uitslagen of every omloop played (at least 3); a place containing "fout" can't
+// be found online (a photo still works). The evaluation checks each bet against the winner.
+function mockReviewStep(entry: MockKoersdag, step: ReviewStep): string | null {
+  const { koersdag } = entry
+  const review = reviewOf(entry)
+  if (step === 'evaluate') {
+    const omlopen = (review.results ?? []).map((r) => {
+      const bets = koersdag.bets.filter((b) => b.omloop === r.omloop)
+      const hit = bets.some((b) => b.bet.toLowerCase().includes(r.winner.toLowerCase()))
+      return {
+        omloop: r.omloop,
+        correct: bets.length ? hit : null,
+        advice: bets.map((b) => b.bet).join(', '),
+        winner: r.winner,
+        reason: hit
+          ? 'Het paard liep zoals verwacht vanaf de goede kant.'
+          : `${r.winner} was sterker in de finale dan de vorm deed vermoeden.`,
+      }
+    })
+    const correct = omlopen.filter((o) => o.correct).length
+    const advised = omlopen.filter((o) => o.correct !== null).length
+    const createdAt = new Date().toISOString()
+    review.evaluation = {
+      summary: advised
+        ? `${correct} van de ${advised} gespeelde omlopen klopten. De favorieten waren sterk in ${koersdag.draverij.place}.`
+        : `Er waren geen inzetten om te vergelijken. De favorieten waren sterk in ${koersdag.draverij.place}.`,
+      omlopen,
+      createdAt,
+    }
+    terugblikDb.lessons.unshift({
+      id: nextId('les'),
+      text: `In ${koersdag.draverij.place} winnen favorieten vaak vanaf de binnenkant.`,
+      createdAt,
+      draverijId: koersdag.draverij.id,
+      place: koersdag.draverij.place,
+      date: koersdag.draverij.date,
+    })
+    writeSession(entry)
+    return null
+  }
+  if (step === 'results' && /fout/i.test(koersdag.draverij.place)) return RESULTS_NOT_FOUND
+  const count = Math.min(MAX_OMLOPEN, Math.max(3, koersdag.omloop))
+  const horse = (i: number) => MOCK_WINNERS[i % MOCK_WINNERS.length]
+  review.results = Array.from({ length: count }, (_, i) => ({
+    omloop: i + 1,
+    winner: horse(i)!,
+    places: `2. ${horse(i + 1)}, 3. ${horse(i + 2)}`,
+  }))
+  return null
+}
+
+function startReviewStep(
+  user: MockUser,
+  entry: MockKoersdag,
+  step: ReviewStep,
+  prepare: () => Response | void = () => {},
+): Response | null {
+  const review = reviewOf(entry)
+  if (review.status === 'thinking') return fail(409, REVIEW_BUSY)
+  const refused = prepare() ?? claimAiRun(user, review)
+  if (refused) return refused
+  const run = nextId('run')
+  Object.assign(review, { run, status: 'thinking', error: null, step })
+  setTimeout(() => {
+    if (review.run !== run || review.status !== 'thinking') return
+    const error = mockReviewStep(entry, step)
+    Object.assign(review, { status: error ? 'error' : 'idle', error })
+  }, AI_REPLY_DELAY)
+  return null
+}
+
+// Validates results the user confirms, like readResults in the Lambda
+function readResults(value: unknown): OmloopResult[] | string {
+  if (!Array.isArray(value) || value.length === 0)
+    return 'Vul de uitslag van minstens één omloop in.'
+  if (value.length > MAX_OMLOPEN) return `Je kunt maximaal ${MAX_OMLOPEN} omlopen invullen.`
+  const results: OmloopResult[] = []
+  for (const item of value) {
+    const r = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>
+    const omloop = r.omloop
+    if (typeof omloop !== 'number' || !Number.isInteger(omloop) || omloop < 1 || omloop > 30) {
+      return 'Er klopt iets niet met de omlopen. Probeer het opnieuw.'
+    }
+    const winner = typeof r.winner === 'string' ? r.winner.trim() : ''
+    if (!winner) return `Vul de winnaar van de ${omloop}e omloop in.`
+    if (winner.length > MAX_WINNER_LENGTH) {
+      return `De winnaar mag maximaal ${MAX_WINNER_LENGTH} tekens zijn.`
+    }
+    const places = typeof r.places === 'string' ? r.places.trim() : ''
+    if (places.length > MAX_PLACES_LENGTH) {
+      return `De plaatsen mogen maximaal ${MAX_PLACES_LENGTH} tekens zijn.`
+    }
+    results.push({ omloop, winner, places })
+  }
+  if (new Set(results.map((r) => r.omloop)).size !== results.length) {
+    return 'Elke omloop mag maar één keer voorkomen.'
+  }
+  return results.sort((a, b) => a.omloop - b.omloop)
+}
+
+function finishedKoersdagFor(request: Request, id: unknown): KoersdagGuard {
+  const guard = koersdagFor(request, id)
+  if (guard.entry && !guard.entry.koersdag.finishedAt) {
+    return { error: fail(409, 'Rond eerst de koersdag af.') }
+  }
+  return guard
+}
+
+const withBalance = (s: Omit<PlaySession, 'balance'>) => ({
+  id: s.id,
+  date: s.date,
+  draverij: s.draverij,
+  staked: s.staked,
+  paidOut: s.paidOut,
+  balance: round2(s.paidOut - s.staked),
+  evaluated: s.evaluated === true,
+})
+
+function sumUp(rows: { staked: number; paidOut: number }[]) {
+  const staked = round2(rows.reduce((sum, r) => sum + r.staked, 0))
+  const paidOut = round2(rows.reduce((sum, r) => sum + r.paidOut, 0))
+  return { staked, paidOut, balance: round2(paidOut - staked) }
+}
+
 type Body = Record<string, unknown>
 
 export const handlers = [
@@ -591,7 +793,8 @@ export const handlers = [
     if (error) return error
     const body = (await request.json()) as Body
     if (!body.currentPassword) return fail(400, 'Vul je huidige wachtwoord in.')
-    if (body.currentPassword !== user.password) return fail(400, 'Je huidige wachtwoord klopt niet.')
+    if (body.currentPassword !== user.password)
+      return fail(400, 'Je huidige wachtwoord klopt niet.')
     const password = checkPassword(body.newPassword)
     if (password instanceof Response) return password
     user.password = password
@@ -602,7 +805,10 @@ export const handlers = [
     await delay(LAG)
     const { user, error } = authenticate(request)
     if (error) return error
-    const sessions = (db.sessions[user.id] ?? []).map((s) => ({ ...s, balance: s.paidOut - s.staked }))
+    const sessions = (db.sessions[user.id] ?? []).map((s) => ({
+      ...s,
+      balance: s.paidOut - s.staked,
+    }))
     const staked = sessions.reduce((sum, s) => sum + s.staked, 0)
     const paidOut = sessions.reduce((sum, s) => sum + s.paidOut, 0)
     return HttpResponse.json({ sessions, totals: { staked, paidOut, balance: paidOut - staked } })
@@ -628,7 +834,8 @@ export const handlers = [
     const body = (await request.json()) as Body
     const name = checkName(body.name)
     if (name instanceof Response) return name
-    const dailyLimit = body.dailyLimit === undefined ? DEFAULT_DAILY_LIMIT : checkLimit(body.dailyLimit)
+    const dailyLimit =
+      body.dailyLimit === undefined ? DEFAULT_DAILY_LIMIT : checkLimit(body.dailyLimit)
     if (dailyLimit instanceof Response) return dailyLimit
 
     const friend: MockUser = {
@@ -663,7 +870,8 @@ export const handlers = [
         return fail(409, 'Deze vriend heeft de uitnodiging nog niet geaccepteerd.')
       }
     }
-    const dailyLimit = body.dailyLimit === undefined ? friend.dailyLimit : checkLimit(body.dailyLimit)
+    const dailyLimit =
+      body.dailyLimit === undefined ? friend.dailyLimit : checkLimit(body.dailyLimit)
     if (dailyLimit instanceof Response) return dailyLimit
 
     if (body.status !== undefined) friend.status = body.status as 'active' | 'paused'
@@ -734,7 +942,13 @@ export const handlers = [
     const { error } = requireOwner(request)
     if (error) return error
     storedToken = null
-    db.ai = { status: 'none', tokenHint: null, connectedAt: null, lastTestedAt: null, lastError: null }
+    db.ai = {
+      status: 'none',
+      tokenHint: null,
+      connectedAt: null,
+      lastTestedAt: null,
+      lastError: null,
+    }
     return HttpResponse.json(aiOverview())
   }),
   // ── Analyse ───────────────────────────────────────────────────────────
@@ -1066,7 +1280,10 @@ export const handlers = [
     const image = typeof body.image === 'string' ? body.image : ''
     if (!image) return fail(400, 'Maak eerst een foto.')
     if (image.length > MAX_PHOTO_BASE64) {
-      return fail(413, 'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.')
+      return fail(
+        413,
+        'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.',
+      )
     }
     if (!sniffBase64(image)) return fail(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
     const refused = startUpdate(user, entry, 'photo')
@@ -1118,7 +1335,10 @@ export const handlers = [
     if (amount instanceof Response) return amount
     const { koersdag } = entry
     const suggestionId = typeof body.suggestionId === 'string' ? body.suggestionId : null
-    if (suggestionId && !koersdag.updates.some((u) => u.advice.some((s) => s.id === suggestionId))) {
+    if (
+      suggestionId &&
+      !koersdag.updates.some((u) => u.advice.some((s) => s.id === suggestionId))
+    ) {
       return fail(404, 'Deze suggestie bestaat niet (meer).')
     }
     if (!suggestionId || !koersdag.bets.some((b) => b.suggestionId === suggestionId)) {
@@ -1172,5 +1392,166 @@ export const handlers = [
     koersdag.bets = koersdag.bets.filter((b) => b.id !== params.betId)
     koersdag.updatedAt = new Date().toISOString()
     return HttpResponse.json(koersdagView(entry))
+  }),
+
+  // ── Terugblik ─────────────────────────────────────────────────────────
+
+  http.get(`${BASE}/terugblik`, async ({ request }) => {
+    await delay(LAG)
+    const { user, error } = authenticate(request)
+    if (error) return error
+    const koersdagen = (db.sessions[user.id] ?? [])
+      .map(withBalance)
+      .sort((a, b) => b.date.localeCompare(a.date))
+    return HttpResponse.json({ koersdagen, totals: sumUp(koersdagen) })
+  }),
+
+  http.get(`${BASE}/terugblik/overview`, async ({ request }) => {
+    await delay(LAG)
+    const { error } = requireOwner(request)
+    if (error) return error
+    const perUser = db.users
+      .filter((u) => u.status !== 'invited')
+      .map((u) => ({ user: u, sessions: (db.sessions[u.id] ?? []).map(withBalance) }))
+    return HttpResponse.json({
+      users: perUser
+        .map(({ user: u, sessions }) => ({
+          id: u.id,
+          name: u.name,
+          role: u.role,
+          koersdagen: sessions.length,
+          ...sumUp(sessions),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'nl')),
+      koersdagen: perUser
+        .flatMap(({ user: u, sessions }) =>
+          sessions.map((s) => ({ ...s, userId: u.id, userName: u.name })),
+        )
+        .sort((a, b) => b.date.localeCompare(a.date) || a.userName.localeCompare(b.userName, 'nl')),
+    })
+  }),
+
+  http.get(`${BASE}/terugblik/:id`, async ({ params, request }) => {
+    await delay(LAG)
+    const { entry, error } = finishedKoersdagFor(request, params.id)
+    if (error) return error
+    return HttpResponse.json(terugblikView(entry))
+  }),
+
+  http.post(`${BASE}/terugblik/:id/results/fetch`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = finishedKoersdagFor(request, params.id)
+    if (error) return error
+    const refused = startReviewStep(user, entry, 'results')
+    if (refused) return refused
+    return HttpResponse.json(terugblikView(entry), { status: 202 })
+  }),
+
+  http.post(`${BASE}/terugblik/:id/results/photo`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = finishedKoersdagFor(request, params.id)
+    if (error) return error
+    const body = (await request.json()) as Body
+    if (
+      typeof body.mediaType !== 'string' ||
+      !['image/jpeg', 'image/png', 'image/webp'].includes(body.mediaType)
+    ) {
+      return fail(400, 'Gebruik een foto (JPG, PNG of WebP).')
+    }
+    const image = typeof body.image === 'string' ? body.image : ''
+    if (!image) return fail(400, 'Maak eerst een foto van het uitslagbord.')
+    if (image.length > MAX_PHOTO_BASE64) {
+      return fail(
+        413,
+        'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.',
+      )
+    }
+    if (!sniffBase64(image)) return fail(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
+    const refused = startReviewStep(user, entry, 'photo')
+    if (refused) return refused
+    return HttpResponse.json(terugblikView(entry), { status: 202 })
+  }),
+
+  // Confirms the uitslagen and starts the evaluation; when the AI can't start, the uitslagen
+  // stay confirmed and the evaluation can follow later
+  http.put(`${BASE}/terugblik/:id/results`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = finishedKoersdagFor(request, params.id)
+    if (error) return error
+    const body = (await request.json()) as Body
+    const results = readResults(body.results)
+    if (typeof results === 'string') return fail(400, results)
+    const review = reviewOf(entry)
+    if (review.status === 'thinking') return fail(409, REVIEW_BUSY)
+    Object.assign(review, {
+      results,
+      resultsConfirmedAt: new Date().toISOString(),
+      evaluation: null,
+    })
+    const refused = startReviewStep(user, entry, 'evaluate')
+    if (refused) {
+      const { message } = (await refused.json()) as { message: string }
+      Object.assign(review, { status: 'error', error: message, step: 'evaluate' })
+      writeSession(entry)
+      return HttpResponse.json(terugblikView(entry))
+    }
+    return HttpResponse.json(terugblikView(entry), { status: 202 })
+  }),
+
+  http.post(`${BASE}/terugblik/:id/evaluate`, async ({ params, request }) => {
+    await delay(LAG)
+    const { user, entry, error } = finishedKoersdagFor(request, params.id)
+    if (error) return error
+    const review = reviewOf(entry)
+    const refused = startReviewStep(user, entry, 'evaluate', () => {
+      if (!review.resultsConfirmedAt || !review.results?.length) {
+        return fail(409, 'Bevestig eerst de uitslagen.')
+      }
+    })
+    if (refused) return refused
+    return HttpResponse.json(terugblikView(entry), { status: 202 })
+  }),
+
+  http.patch(`${BASE}/terugblik/:id/bets/:betId`, async ({ params, request }) => {
+    await delay(LAG)
+    const { entry, error } = finishedKoersdagFor(request, params.id)
+    if (error) return error
+    const body = (await request.json()) as Body
+    const hasAmount = 'amount' in body
+    const hasWinnings = 'winnings' in body
+    if (!hasAmount && !hasWinnings) return fail(400, 'Er is niets om te wijzigen.')
+    const amount = hasAmount
+      ? checkAmount(body.amount, 'Vul een inzet in van meer dan € 0.')
+      : undefined
+    if (amount instanceof Response) return amount
+    const winnings =
+      hasWinnings && body.winnings !== null
+        ? checkAmount(body.winnings, 'Vul de uitbetaling in (0 als de inzet verloren is).', true)
+        : null
+    if (winnings instanceof Response) return winnings
+    const bet = entry.koersdag.bets.find((b) => b.id === params.betId)
+    if (!bet) return fail(404, 'Deze inzet bestaat niet (meer).')
+    if (amount !== undefined) bet.amount = amount
+    if (hasWinnings) bet.winnings = winnings
+    entry.koersdag.updatedAt = new Date().toISOString()
+    writeSession(entry)
+    return HttpResponse.json(terugblikView(entry))
+  }),
+
+  http.get(`${BASE}/lessons`, async ({ request }) => {
+    await delay(LAG)
+    const { error } = requireOwner(request)
+    if (error) return error
+    return HttpResponse.json({ lessons: structuredClone(terugblikDb.lessons) })
+  }),
+
+  http.delete(`${BASE}/lessons/:id`, async ({ params, request }) => {
+    await delay(LAG)
+    const { error } = requireOwner(request)
+    if (error) return error
+    const index = terugblikDb.lessons.findIndex((l) => l.id === params.id)
+    if (index < 0) return fail(404, 'Deze les bestaat niet (meer).')
+    terugblikDb.lessons.splice(index, 1)
+    return HttpResponse.json({ ok: true })
   }),
 ]

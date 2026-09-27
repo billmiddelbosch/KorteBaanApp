@@ -72,9 +72,7 @@ async function savePassword() {
     passwordSaved.value = true
   } catch (error) {
     const message = errorMessage(error)
-    passwordErrors.value = message.includes('huidige')
-      ? { current: message }
-      : { next: message }
+    passwordErrors.value = message.includes('huidige') ? { current: message } : { next: message }
   } finally {
     savingPassword.value = false
   }
@@ -153,7 +151,7 @@ onMounted(load)
         <ul class="mt-2 divide-y divide-slate-200 dark:divide-white/10">
           <li v-for="session in overview.sessions" :key="session.id">
             <RouterLink
-              :to="{ path: '/terugblik', query: { sessie: session.id } }"
+              :to="`/terugblik/${session.id}`"
               class="-mx-2 flex min-h-14 items-center gap-3 rounded-lg px-2 py-2 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-600 dark:hover:bg-white/5"
             >
               <div class="min-w-0 flex-1">
@@ -178,9 +176,15 @@ onMounted(load)
     <section aria-labelledby="profile-title" :class="ui.card">
       <h2 id="profile-title" :class="ui.h2">Profiel</h2>
       <p :class="[ui.muted, 'mt-1']">
-        Je logt in als <span class="font-mono text-slate-800 dark:text-slate-200">{{ auth.user?.username }}</span>.
+        Je logt in als
+        <span class="font-mono text-slate-800 dark:text-slate-200">{{ auth.user?.username }}</span
+        >.
       </p>
-      <form class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" novalidate @submit.prevent="saveName">
+      <form
+        class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end"
+        novalidate
+        @submit.prevent="saveName"
+      >
         <div class="flex-1">
           <label for="profile-name" :class="ui.label">Naam</label>
           <input

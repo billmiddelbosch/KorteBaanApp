@@ -9,6 +9,8 @@ import type { Bet } from '@/types/koersdag'
 const props = defineProps<{
   bets: Bet[]
   readonly?: boolean
+  // Terugblik: only the payouts can be corrected, bets are not added or removed
+  payoutsOnly?: boolean
   // The bet being saved (or 'new' for the add form)
   busyId?: string | null
 }>()
@@ -89,9 +91,10 @@ function submitAdd() {
   <section :class="[ui.card, 'flex flex-col gap-4']" aria-labelledby="bets-title">
     <h2 id="bets-title" :class="ui.h2">Mijn inzetten</h2>
 
-    <p v-if="!bets.length" :class="ui.muted">
-      Nog niets ingezet. Tik bij een advies op <strong class="font-semibold">Ingezet</strong> zodra je
-      de inzet hebt geplaatst.
+    <p v-if="!bets.length && payoutsOnly" :class="ui.muted">Je hebt deze koersdag niets ingezet.</p>
+    <p v-else-if="!bets.length" :class="ui.muted">
+      Nog niets ingezet. Tik bij een advies op <strong class="font-semibold">Ingezet</strong> zodra
+      je de inzet hebt geplaatst.
     </p>
 
     <ul v-else class="flex flex-col divide-y divide-slate-200 dark:divide-white/10">
@@ -105,7 +108,7 @@ function submitAdd() {
             </p>
           </div>
           <button
-            v-if="!readonly"
+            v-if="!readonly && !payoutsOnly"
             type="button"
             :class="[ui.btnGhost, 'size-11 shrink-0 px-0']"
             :disabled="busyId === bet.id"
@@ -136,13 +139,22 @@ function submitAdd() {
               :class="[ui.input, 'mt-0 w-32 tabular-nums']"
               :aria-invalid="!!winningsErrors[bet.id]"
             />
-            <button type="submit" :class="ui.btnSecondary" :disabled="busyId === bet.id">Opslaan</button>
-            <button type="button" :class="ui.btnGhost" :disabled="busyId === bet.id" @click="lost(bet)">
+            <button type="submit" :class="ui.btnSecondary" :disabled="busyId === bet.id">
+              Opslaan
+            </button>
+            <button
+              type="button"
+              :class="ui.btnGhost"
+              :disabled="busyId === bet.id"
+              @click="lost(bet)"
+            >
               Verloren
             </button>
           </div>
           <p v-if="winningsErrors[bet.id]" :class="ui.fieldError">
-            <CircleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />{{ winningsErrors[bet.id] }}
+            <CircleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />{{
+              winningsErrors[bet.id]
+            }}
           </p>
         </form>
         <div v-else-if="bet.winnings !== null" class="flex items-center justify-between gap-3">
@@ -164,7 +176,7 @@ function submitAdd() {
       </li>
     </ul>
 
-    <template v-if="!readonly">
+    <template v-if="!readonly && !payoutsOnly">
       <form
         v-if="adding"
         class="flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-white/10"
