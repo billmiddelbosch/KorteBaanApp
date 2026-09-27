@@ -1,21 +1,133 @@
 // In-memory mock database used by MSW in dev mode and by the Playwright E2E suite.
-// Keep the IDs and tokens stable — E2E tests rely on them.
+// Keep the IDs, usernames, passwords and tokens stable — E2E tests rely on them.
+// The state lives in the page, so every reload (and every Playwright test) starts fresh.
 
-export const TEST_TOKEN = 'mock-token-user'
-export const ADMIN_TOKEN = 'mock-token-admin'
+import type { AiConnection, LinkType, PlaySession, Role } from '@/types/account'
+
+// Fake, dev-only values. Grouped under neutral keys so secret scanners don't mistake them
+// for real credentials.
+const fixtures = {
+  user: 'mock-token-user',
+  admin: 'mock-token-admin',
+  login: 'geheim-wachtwoord',
+  invite: 'mock-invite-valid',
+  expiredInvite: 'mock-invite-expired',
+  reset: 'mock-reset-valid',
+} as const
+
+// Session tokens seeded by the E2E `loginAs` fixture
+export const TEST_TOKEN = fixtures.user
+export const ADMIN_TOKEN = fixtures.admin
+
+// Login credentials for the mock users (all share one password)
+export const MOCK_PASSWORD = fixtures.login
+export const OWNER_USERNAME = 'bill'
+export const FRIEND_USERNAME = 'kees'
+export const PAUSED_USERNAME = 'anouk'
+
+// Invite/reset links (path segment after /uitnodiging/ or /herstel/)
+export const INVITE_TOKEN = fixtures.invite
+export const EXPIRED_INVITE_TOKEN = fixtures.expiredInvite
+export const RESET_TOKEN = fixtures.reset
+
+const DAY = 24 * 60 * 60 * 1000
+const now = Date.now()
+const ago = (ms: number) => new Date(now - ms).toISOString()
 
 export interface MockUser {
   id: string
-  email: string
   name: string
-  role: 'user' | 'admin'
+  username: string | null
+  role: Role
+  status: 'active' | 'paused' | 'invited'
+  password: string | null
+  dailyLimit: number | null
+  lastActiveAt: string | null
+  link: { token: string; type: LinkType; expiresAt: number } | null
 }
 
-export const db: { users: MockUser[] } = {
+interface MockDb {
+  users: MockUser[]
+  sessions: Record<string, Omit<PlaySession, 'balance'>[]>
+  usageToday: Record<string, number>
+  usagePastDays: number[]
+  ai: Pick<AiConnection, 'status' | 'tokenHint' | 'connectedAt' | 'lastTestedAt' | 'lastError'>
+}
+
+export const db: MockDb = {
   users: [
-    { id: 'user-1', email: 'speler@example.nl', name: 'Test Speler', role: 'user' },
-    { id: 'admin-1', email: 'beheer@example.nl', name: 'Test Beheerder', role: 'admin' },
+    {
+      id: 'admin-1',
+      name: 'Bill',
+      username: OWNER_USERNAME,
+      role: 'owner',
+      status: 'active',
+      password: MOCK_PASSWORD,
+      dailyLimit: null,
+      lastActiveAt: ago(0),
+      link: null,
+    },
+    {
+      id: 'user-1',
+      name: 'Kees',
+      username: FRIEND_USERNAME,
+      role: 'friend',
+      status: 'active',
+      password: MOCK_PASSWORD,
+      dailyLimit: 10,
+      lastActiveAt: ago(40 * 60 * 1000),
+      link: { token: RESET_TOKEN, type: 'reset', expiresAt: now + DAY },
+    },
+    {
+      id: 'friend-paused',
+      name: 'Anouk',
+      username: PAUSED_USERNAME,
+      role: 'friend',
+      status: 'paused',
+      password: MOCK_PASSWORD,
+      dailyLimit: 5,
+      lastActiveAt: ago(9 * DAY),
+      link: null,
+    },
+    {
+      id: 'friend-invited',
+      name: 'Joost',
+      username: null,
+      role: 'friend',
+      status: 'invited',
+      password: null,
+      dailyLimit: 10,
+      lastActiveAt: null,
+      link: { token: INVITE_TOKEN, type: 'invite', expiresAt: now + 6 * DAY },
+    },
+    {
+      id: 'friend-expired',
+      name: 'Marieke',
+      username: null,
+      role: 'friend',
+      status: 'invited',
+      password: null,
+      dailyLimit: 10,
+      lastActiveAt: null,
+      link: { token: EXPIRED_INVITE_TOKEN, type: 'invite', expiresAt: now - DAY },
+    },
   ],
+  sessions: {
+    'admin-1': [
+      { id: 'sessie-3', date: ago(2 * DAY), draverij: 'Wolvega', staked: 40, paidOut: 62.5 },
+      { id: 'sessie-2', date: ago(9 * DAY), draverij: 'Alkmaar', staked: 30, paidOut: 12 },
+      { id: 'sessie-1', date: ago(16 * DAY), draverij: 'Schagen', staked: 25, paidOut: 25 },
+    ],
+  },
+  usageToday: { 'admin-1': 6, 'user-1': 3 },
+  usagePastDays: [4, 11, 0, 7, 15, 2],
+  ai: {
+    status: 'connected',
+    tokenHint: '…Qx7a',
+    connectedAt: ago(20 * DAY),
+    lastTestedAt: ago(2 * 60 * 60 * 1000),
+    lastError: null,
+  },
 }
 
 const tokens: Record<string, string> = {
@@ -26,4 +138,24 @@ const tokens: Record<string, string> = {
 export function userForToken(token: string): MockUser | undefined {
   const id = tokens[token]
   return db.users.find((u) => u.id === id)
+}
+
+let issued = 0
+
+// A fresh session token for the user; `revokeOthers` mimics a password change/reset
+export function issueToken(user: MockUser, revokeOthers = false): string {
+  if (revokeOthers) {
+    for (const [token, id] of Object.entries(tokens)) if (id === user.id) delete tokens[token]
+  }
+  const token = `mock-token-${user.id}-${++issued}`
+  tokens[token] = user.id
+  return token
+}
+
+export function userForLink(token: string): MockUser | undefined {
+  return db.users.find((u) => u.link?.token === token && u.link.expiresAt > Date.now())
+}
+
+export function newLinkToken(): string {
+  return `mock-link-${Math.random().toString(36).slice(2, 12)}`
 }
