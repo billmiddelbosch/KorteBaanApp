@@ -3,6 +3,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
+import * as events from 'aws-cdk-lib/aws-events'
+import * as targets from 'aws-cdk-lib/aws-events-targets'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager'
 import { Construct } from 'constructs'
@@ -242,6 +244,26 @@ export class ApiStack extends cdk.Stack {
       photoBuckets[env].grantRead(terugblikWorkerFn)
       photoBuckets[env].grantDelete(terugblikWorkerFn)
       terugblikWorkerFn.addAlias(env, { retryAttempts: 0 }).grantInvoke(terugblikFn)
+    }
+
+    // Kortebaankalender: copies the Kortebaanbond calendar into the draverijen list, daily per environment
+    const kalenderSyncFn = makeFn(
+      'KalenderSyncFunction',
+      'kalenderSync',
+      'kalenderSync.handler',
+      'Kortebaankalender (kortebaanbond.nl) into the draverijen list',
+      {
+        timeout: cdk.Duration.minutes(1),
+        environment: { TABLE_DEV: tables.dev.tableName, TABLE_PROD: tables.prod.tableName },
+      },
+    )
+    for (const env of envs) {
+      tables[env].grantReadWriteData(kalenderSyncFn)
+      new events.Rule(this, `KalenderSync-${env}`, {
+        description: `Daily kortebaankalender sync (${env})`,
+        schedule: events.Schedule.cron({ minute: '0', hour: '4' }),
+        targets: [new targets.LambdaFunction(kalenderSyncFn.addAlias(env, { retryAttempts: 1 }))],
+      })
     }
 
     const functions = [healthFn, ...accountFunctions]
