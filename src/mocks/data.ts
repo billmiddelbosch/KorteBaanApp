@@ -4,6 +4,7 @@
 
 import type { AiConnection, LinkType, PlaySession, Role } from '@/types/account'
 import type { Chat, Draverij, LockedAdvice } from '@/types/analyse'
+import type { Koersdag } from '@/types/koersdag'
 
 // Fake, dev-only values. Grouped under neutral keys so secret scanners don't mistake them
 // for real credentials.
@@ -179,6 +180,8 @@ const draverij = (place: string, days: number): Draverij => {
   return { id: `${date}-${place.toLowerCase()}`, place, date }
 }
 
+// Today's draverij, for Koersdag
+export const ALKMAAR = draverij('Alkmaar', 0)
 export const WOLVEGA = draverij('Wolvega', 6)
 export const HOLLANDSCHEVELD = draverij('Hollandscheveld', 13)
 export const SCHAGEN = draverij('Schagen', 20)
@@ -198,7 +201,7 @@ export const analyseDb: {
   advice: Record<string, LockedAdvice>
   instruction: { text: string; updatedAt: string | null; previous: string | null }
 } = {
-  draverijen: [WOLVEGA, HOLLANDSCHEVELD, SCHAGEN],
+  draverijen: [ALKMAAR, WOLVEGA, HOLLANDSCHEVELD, SCHAGEN],
   chats: {
     [`user-1/${WOLVEGA.id}`]: {
       userId: 'user-1',
@@ -231,6 +234,43 @@ export const analyseDb: {
       },
     },
   },
-  advice: {},
+  advice: {
+    [`user-1/${ALKMAAR.id}`]: {
+      draverij: ALKMAAR,
+      messageId: 'm-alkmaar-advies',
+      lockedAt: ago(DAY),
+      proposal: {
+        summary: 'Vooral de favorieten in de eerste omlopen, met een kleine gok in de finale.',
+        budget: 50,
+        picks: [
+          {
+            race: '1e omloop, koppel 3',
+            bet: 'Winnaar: Fleur de Lis',
+            amount: 20,
+            reasoning: 'Won twee van de laatste drie koersen.',
+          },
+          {
+            race: 'Finale',
+            bet: 'Winnaar: Ilse van de Heide',
+            amount: 10,
+            reasoning: 'Buitenkans met hoge quote.',
+          },
+        ],
+      },
+    },
+  },
   instruction: { text: MOCK_DEFAULT_INSTRUCTION, updatedAt: null, previous: null },
 }
+
+// ── Koersdag ──────────────────────────────────────────────────────────────
+
+// Koersdagen per user, keyed `${userId}/${draverijId}`. Starts empty: every test starts one.
+export interface MockKoersdag {
+  userId: string
+  countedDay: string | null
+  // Identifies the pending AI update, so finishing drops the old answer
+  run?: string
+  koersdag: Omit<Koersdag, 'staked' | 'paidOut' | 'remaining' | 'lockedAdvice'>
+}
+
+export const koersdagDb: { koersdagen: Record<string, MockKoersdag> } = { koersdagen: {} }

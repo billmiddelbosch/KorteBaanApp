@@ -60,9 +60,17 @@ const MAX_CONTINUATIONS = 3
 const OAUTH_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 const WEB_SEARCH_TOOL = { type: 'web_search_20250305', name: 'web_search', max_uses: 5 }
 
+export interface ChatImage {
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  // base64, without a data: prefix
+  data: string
+}
+
 export interface ChatTurn {
   role: 'user' | 'assistant'
   text: string
+  // Only on user turns: photos sent along for Claude vision
+  images?: ChatImage[]
 }
 
 export interface ChatReply {
@@ -84,6 +92,7 @@ export class ClaudeError extends Error {
 interface ContentBlock {
   type: string
   text?: string
+  source?: { type: 'base64'; media_type: string; data: string }
   citations?: { url?: string; title?: string }[] | null
   content?: unknown
 }
@@ -98,14 +107,34 @@ type ApiMessage = { role: 'user' | 'assistant'; content: string | ContentBlock[]
 // The API needs alternating roles starting with the user; a failed turn can leave two user
 // messages in a row, so merge those
 export function toApiMessages(turns: ChatTurn[]): ApiMessage[] {
-  const messages: { role: 'user' | 'assistant'; content: string }[] = []
+  const messages: { role: 'user' | 'assistant'; text: string; images: ChatImage[] }[] = []
   for (const turn of turns) {
     const last = messages.at(-1)
-    if (last && last.role === turn.role) last.content += `\n\n${turn.text}`
-    else messages.push({ role: turn.role, content: turn.text })
+    if (last && last.role === turn.role) {
+      last.text += `\n\n${turn.text}`
+      last.images.push(...(turn.images ?? []))
+    } else {
+      messages.push({ role: turn.role, text: turn.text, images: [...(turn.images ?? [])] })
+    }
   }
   while (messages[0]?.role === 'assistant') messages.shift()
-  return messages
+  // Plain text stays a string; photos go first as image blocks, followed by the text
+  return messages.map(({ role, text, images }): ApiMessage =>
+    images.length && role === 'user'
+      ? {
+          role,
+          content: [
+            ...images.map(
+              (img): ContentBlock => ({
+                type: 'image',
+                source: { type: 'base64', media_type: img.mediaType, data: img.data },
+              }),
+            ),
+            { type: 'text', text },
+          ],
+        }
+      : { role, content: text },
+  )
 }
 
 export function sourcesOf(content: ContentBlock[]): { url: string; title: string }[] {

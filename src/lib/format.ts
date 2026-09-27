@@ -61,3 +61,10 @@ export function daysUntil(date: string, now = new Date()): string {
   if (days === 1) return 'morgen'
   return `over ${days} dagen`
 }
+
+// "50", "12,50", "€ 7.5" → number; null when it isn't an amount
+export function parseEuro(input: string): number | null {
+  const cleaned = input.replace(/[€\s]/g, '').replace(',', '.')
+  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null
+  return Number(cleaned)
+}
