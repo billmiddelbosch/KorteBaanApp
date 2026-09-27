@@ -57,6 +57,8 @@ export interface SessionRecord {
   draverij: string
   staked: number
   paidOut: number
+  // Terugblik: the AI has evaluated this koersdag
+  evaluated?: boolean
 }
 
 export interface AiConfig {

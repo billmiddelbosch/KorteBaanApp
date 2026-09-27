@@ -122,7 +122,7 @@ test.describe('My account', () => {
     await loginAs('admin')
     await page.goto('/account')
     await expect(page.getByRole('heading', { name: 'Mijn speelsessies' })).toBeVisible()
-    await expect(page.locator('a[href^="/terugblik?sessie="]', { hasText: 'Wolvega' })).toBeVisible()
+    await expect(page.locator('a[href^="/terugblik/"]', { hasText: 'Wolvega' })).toBeVisible()
     await expect(page.getByTestId('total-balance')).toContainText('4,50')
   })
 
@@ -139,7 +139,9 @@ test.describe('My account', () => {
     await page.getByLabel('Naam').fill('Kees de Vries')
     await page.getByRole('button', { name: 'Naam opslaan' }).click()
     await expect(page.getByText('Naam opgeslagen.')).toBeVisible()
-    await expect(page.getByRole('button', { name: /Gebruikersmenu van Kees de Vries/ })).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /Gebruikersmenu van Kees de Vries/ }),
+    ).toBeVisible()
   })
 
   test('rejects a wrong current password', async ({ page, loginAs }) => {
@@ -161,8 +163,12 @@ test.describe('Friends', () => {
     await page.goto('/account/vrienden')
     const kees = page.getByRole('listitem', { name: 'Kees' })
     await expect(kees.getByText('Actief', { exact: true })).toBeVisible()
-    await expect(page.getByRole('listitem', { name: 'Anouk' }).getByText('Gepauzeerd')).toBeVisible()
-    await expect(page.getByRole('listitem', { name: 'Marieke' }).getByText('Link verlopen')).toBeVisible()
+    await expect(
+      page.getByRole('listitem', { name: 'Anouk' }).getByText('Gepauzeerd'),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('listitem', { name: 'Marieke' }).getByText('Link verlopen'),
+    ).toBeVisible()
   })
 
   test('invites a friend and shows the link to share', async ({ page }) => {
@@ -175,7 +181,9 @@ test.describe('Friends', () => {
     await page.getByRole('button', { name: 'Uitnodigingslink maken' }).click()
     await expect(page.getByRole('heading', { name: 'Uitnodiging voor Pieter' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Kopieer link' })).toBeVisible()
-    await expect(page.getByRole('listitem', { name: 'Pieter' }).getByText('Uitgenodigd')).toBeVisible()
+    await expect(
+      page.getByRole('listitem', { name: 'Pieter' }).getByText('Uitgenodigd'),
+    ).toBeVisible()
   })
 
   test('pauses and resumes a friend', async ({ page }) => {
@@ -201,7 +209,10 @@ test.describe('Friends', () => {
 
   test('removes a friend after confirming', async ({ page }) => {
     await page.goto('/account/vrienden')
-    await page.getByRole('listitem', { name: 'Anouk' }).getByRole('button', { name: 'Verwijderen' }).click()
+    await page
+      .getByRole('listitem', { name: 'Anouk' })
+      .getByRole('button', { name: 'Verwijderen' })
+      .click()
     const dialog = page.getByRole('dialog', { name: 'Anouk verwijderen?' })
     await expect(dialog).toBeVisible()
     await dialog.getByRole('button', { name: 'Anouk verwijderen' }).click()
