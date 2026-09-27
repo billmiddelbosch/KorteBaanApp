@@ -13,8 +13,8 @@ const auth = useAuthStore()
 const koersdag = useKoersdagStore()
 
 const navigationItems: NavItem[] = [
-  { label: 'Koersdag', to: '/', icon: Flag },
   { label: 'Analyse', to: '/analyse', icon: MessageSquareText },
+  { label: 'Koersdag', to: '/', icon: Flag },
   { label: 'Terugblik', to: '/terugblik', icon: ChartLine },
 ]
 

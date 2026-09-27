@@ -55,13 +55,45 @@ async function query<T>(alias: Alias, pk: string, prefix: string, opts: { from?:
 
 // ── Draverijen ───────────────────────────────────────────────────────────
 
+// Draverijen from the Kortebaanbond calendar carry `source` so the sync may remove them again
+const KALENDER_SOURCE = 'kortebaanbond'
+
+const toDraverij = ({ id, place, date }: Draverij): Draverij => ({ id, place, date })
+
 export async function listDraverijen(alias: Alias, fromDate: string): Promise<Draverij[]> {
-  return query<Draverij>(alias, 'DRAVERIJ', 'D#', { from: `D#${fromDate}` })
+  return (await query<Draverij>(alias, 'DRAVERIJ', 'D#', { from: `D#${fromDate}` })).map(toDraverij)
 }
 
 export async function getDraverij(alias: Alias, id: string): Promise<Draverij | undefined> {
   const res = await doc.send(new GetCommand({ TableName: tableName(alias), Key: { pk: 'DRAVERIJ', sk: `D#${id}` } }))
-  return strip<Draverij>(res.Item)
+  const draverij = strip<Draverij>(res.Item)
+  return draverij && toDraverij(draverij)
+}
+
+export async function putKalenderDraverij(alias: Alias, draverij: Draverij): Promise<void> {
+  await doc.send(
+    new PutCommand({
+      TableName: tableName(alias),
+      Item: { pk: 'DRAVERIJ', sk: `D#${draverij.id}`, ...draverij, source: KALENDER_SOURCE },
+    }),
+  )
+}
+
+// Only removes draverijen the sync added itself; ones a user entered stay
+export async function deleteKalenderDraverij(alias: Alias, id: string): Promise<void> {
+  try {
+    await doc.send(
+      new DeleteCommand({
+        TableName: tableName(alias),
+        Key: { pk: 'DRAVERIJ', sk: `D#${id}` },
+        ConditionExpression: '#source = :source',
+        ExpressionAttributeNames: { '#source': 'source' },
+        ExpressionAttributeValues: { ':source': KALENDER_SOURCE },
+      }),
+    )
+  } catch (err) {
+    if (!(err instanceof Error && err.name === 'ConditionalCheckFailedException')) throw err
+  }
 }
 
 export async function putDraverij(alias: Alias, draverij: Draverij): Promise<void> {

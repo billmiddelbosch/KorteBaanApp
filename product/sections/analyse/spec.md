@@ -4,7 +4,7 @@
 Analyse is een open AI-chat die de gebruiker vóór een koersdag begeleidt naar een inzetadvies voor een zelfgekozen draverij. De AI werkt vanuit een vaste instructie die de eigenaar beheert, zoekt zelf online naar actuele uitslagen en berichtgeving en gebruikt de gedeelde kennisbank. De chat eindigt met een vastgelegde inzetadvies-kaart die op de koersdag het startpunt is in Koersdag en na afloop in Terugblik wordt gebruikt.
 
 ## User Flows
-- Koers kiezen: uit een lijst met komende draverijen (plaats + datum), of zelf plaats en datum invullen als de koers er niet tussen staat
+- Koers kiezen: uit een lijst met komende draverijen (plaats + datum), of zelf plaats en datum invullen als de koers er niet tussen staat. De lijst wordt dagelijks gevuld met de kortebaankalender van de Kortebaanbond voor het komende jaar; afgelaste kortebanen vallen eruit
 - Chatten: de AI start met de vaste instructie plus de gekozen koers en stelt vragen (bijv. budget, risicobereidheid, paarden of pikeurs om mee te wegen); de gebruiker kan ook zelf vragen stellen
 - Online zoeken: de AI zoekt tijdens de chat actuele uitslagen en berichtgeving; bruikbare feiten en bronnen gaan de gedeelde kennisbank in
 - Advies vastleggen: de AI stelt een inzetadvies voor met onderbouwing per omloop/koppel; de gebruiker legt het met één knop vast, waarna het in Koersdag klaarstaat
