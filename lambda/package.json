@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "npm run bundle:health && npm run bundle:auth && npm run bundle:me && npm run bundle:friends && npm run bundle:aiConnection && npm run bundle:analysis && npm run bundle:analysisWorker && npm run bundle:aiInstruction && npm run bundle:koersdag && npm run bundle:koersdagWorker && npm run bundle:terugblik && npm run bundle:terugblikWorker",
+    "build": "npm run bundle:health && npm run bundle:auth && npm run bundle:me && npm run bundle:friends && npm run bundle:aiConnection && npm run bundle:analysis && npm run bundle:analysisWorker && npm run bundle:aiInstruction && npm run bundle:koersdag && npm run bundle:koersdagWorker && npm run bundle:terugblik && npm run bundle:terugblikWorker && npm run bundle:kalenderSync",
     "test": "vitest run",
     "type-check": "tsc --noEmit",
     "bundle:health": "esbuild src/health.ts --bundle --platform=node --target=node22 --outfile=dist/health.js --external:@aws-sdk/*",
@@ -18,6 +18,7 @@
     "bundle:koersdagWorker": "esbuild src/koersdagWorker.ts --bundle --platform=node --target=node22 --outfile=dist/koersdagWorker.js --external:@aws-sdk/*",
     "bundle:terugblik": "esbuild src/terugblik.ts --bundle --platform=node --target=node22 --outfile=dist/terugblik.js --external:@aws-sdk/*",
     "bundle:terugblikWorker": "esbuild src/terugblikWorker.ts --bundle --platform=node --target=node22 --outfile=dist/terugblikWorker.js --external:@aws-sdk/*",
+    "bundle:kalenderSync": "esbuild src/kalenderSync.ts --bundle --platform=node --target=node22 --outfile=dist/kalenderSync.js --external:@aws-sdk/*",
     "create-owner": "esbuild scripts/create-owner.ts --bundle --platform=node --target=node22 --outfile=.scripts/create-owner.js --external:@aws-sdk/* && node .scripts/create-owner.js"
   },
   "devDependencies": {
