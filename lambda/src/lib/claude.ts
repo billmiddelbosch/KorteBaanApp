@@ -59,6 +59,8 @@ const MAX_CONTINUATIONS = 3
 // Subscription (OAuth) tokens are issued for Claude Code; requests identify as such
 const OAUTH_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 const WEB_SEARCH_TOOL = { type: 'web_search_20250305', name: 'web_search', max_uses: 5 }
+// Reads a page whose URL is in the prompt (e.g. ZEturf for loting and quoteringen)
+const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 4, max_content_tokens: 40_000 }
 
 export interface ChatImage {
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
@@ -146,8 +148,14 @@ export function sourcesOf(content: ContentBlock[]): { url: string; title: string
   for (const block of content) {
     for (const c of block.citations ?? []) add(c.url, c.title)
   }
-  // No citations: fall back to what the searches returned
+  // No citations: fall back to the fetched pages and what the searches returned
   if (found.size === 0) {
+    for (const block of content) {
+      if (block.type === 'web_fetch_tool_result' && block.content && typeof block.content === 'object') {
+        const r = block.content as { type?: unknown; url?: unknown; content?: { title?: unknown } }
+        if (r.type === 'web_fetch_result') add(r.url, r.content?.title)
+      }
+    }
     for (const block of content) {
       if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
         for (const r of block.content as { url?: unknown; title?: unknown }[]) add(r.url, r.title)
@@ -190,10 +198,11 @@ async function errorFor(res: Response): Promise<ClaudeError> {
   return new ClaudeError('other', `Claude gaf een onverwachte fout (${res.status}). Probeer het opnieuw.`)
 }
 
-// One chat turn with web search. Non-streaming; long searches may pause the turn, which we continue.
+// One chat turn with web search (and web fetch when asked). Non-streaming; long searches may
+// pause the turn, which we continue.
 export async function askClaude(
   token: string,
-  input: { system: string; turns: ChatTurn[]; timeoutMs: number },
+  input: { system: string; turns: ChatTurn[]; timeoutMs: number; webFetch?: boolean },
 ): Promise<ChatReply> {
   const signal = AbortSignal.timeout(input.timeoutMs)
   const system = [
@@ -201,21 +210,22 @@ export async function askClaude(
     { type: 'text', text: input.system },
   ]
   const messages = toApiMessages(input.turns)
-  let tools: unknown[] | undefined = [WEB_SEARCH_TOOL]
+  let tools: unknown[] | undefined = input.webFetch ? [WEB_SEARCH_TOOL, WEB_FETCH_TOOL] : [WEB_SEARCH_TOOL]
   const content: ContentBlock[] = []
 
   for (let round = 0; round <= MAX_CONTINUATIONS; round++) {
     const body = { model: CHAT_MODEL, max_tokens: MAX_TOKENS, system, messages, ...(tools ? { tools } : {}) }
     let res = await post(token, body, signal)
-    // If web search isn't available for this token, answer without it rather than not at all
-    if (res.status === 400 && tools) {
+    // If a web tool isn't available for this token, drop web fetch first, then all tools:
+    // answering with less is better than not answering
+    while (res.status === 400 && tools) {
       const detail = await res.clone().text().catch(() => '')
-      if (/web_search|tool/i.test(detail)) {
-        console.warn('Web search rejected, retrying without tools')
-        tools = undefined
-        const { tools: _t, ...withoutTools } = body
-        res = await post(token, withoutTools, signal)
-      }
+      if (!/web_search|web_fetch|tool/i.test(detail)) break
+      const withoutFetch: unknown[] = tools.filter((t) => t !== WEB_FETCH_TOOL)
+      tools = /web_fetch/i.test(detail) && withoutFetch.length < tools.length ? withoutFetch : undefined
+      console.warn(tools ? 'Web fetch rejected, retrying with web search only' : 'Web search rejected, retrying without tools')
+      const { tools: _t, ...rest } = body
+      res = await post(token, tools ? { ...rest, tools } : rest, signal)
     }
     if (!res.ok) throw await errorFor(res)
 

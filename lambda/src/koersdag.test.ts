@@ -2,7 +2,7 @@ import type { APIGatewayProxyEvent, Context } from 'aws-lambda'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Draverij, LockedAdvice } from './lib/analysis'
 import { signToken } from './lib/crypto'
-import type { KoersdagRecord } from './lib/koersdag'
+import type { BoardReading, KoersdagRecord } from './lib/koersdag'
 import type { AiConfig, SessionRecord, UserRecord } from './lib/store'
 
 // In-memory stand-ins for DynamoDB, S3, Secrets Manager, Claude and the worker invoke
@@ -13,6 +13,7 @@ const db = vi.hoisted(() => ({
   draverijen: new Map<string, Draverij>(),
   advice: new Map<string, LockedAdvice>(),
   koersdagen: new Map<string, KoersdagRecord>(),
+  board: [] as { draverijId: string; reading: BoardReading }[],
   photos: new Map<string, { bytes: Uint8Array; contentType: string }>(),
   sessions: [] as { userId: string; session: SessionRecord }[],
   jobs: [] as { userId: string; draverijId: string; thinkingSince: string }[],
@@ -83,8 +84,17 @@ vi.mock('./lib/koersdagStore', async (importOriginal) => {
       if (opts.expectUpdatedAt && current?.updatedAt !== opts.expectUpdatedAt) throw new actual.KoersdagChangedError()
       db.koersdagen.set(k, clone(record))
     },
+    putBoardReading: async (_a: string, draverijId: string, reading: BoardReading) =>
+      void db.board.push({ draverijId, reading: clone(reading) }),
+    listBoardReadings: async (_a: string, draverijId: string, omloop: number) =>
+      db.board
+        .filter((b) => b.draverijId === draverijId && b.reading.omloop === omloop)
+        .map((b) => clone(b.reading))
+        .reverse(),
   }
 })
+
+vi.mock('./lib/zeturf', () => ({ zeturfOmlopen: async () => null }))
 
 const { handler: koersdag } = await import('./koersdag')
 const { handler: worker } = await import('./koersdagWorker')
@@ -139,6 +149,7 @@ beforeEach(() => {
   for (const map of [db.users, db.usage, db.draverijen, db.advice, db.koersdagen, db.photos]) map.clear()
   db.jobs.length = 0
   db.sessions.length = 0
+  db.board.length = 0
   db.ai = { status: 'connected', tokenHint: '…abcd', connectedAt: '2026-09-01T10:00:00.000Z' }
   const base = { tokenVersion: 0, failedLogins: 0, createdAt: '2026-09-01T10:00:00.000Z', status: 'active' as const }
   user = { ...base, id: 'owner-1', name: 'Bill', username: 'bill', role: 'owner', dailyLimit: null }
@@ -281,6 +292,7 @@ describe('during the koersdag', () => {
         oordeel: 'aangepast',
         wijzigingen: ['Fleur heeft een hogere quota'],
         foto: { klopt: false, verschillen: ['Quota Fleur 3,2 → 4,1'] },
+        bord: { quota: ['3 Fleur: winnend 4,1'], loting: [] },
         advies: { toelichting: 'Minder inzetten', keuzes: [{ inzet: 'Winnaar: Fleur', bedrag: 10, nieuw: true }] },
       }),
     )
@@ -296,6 +308,17 @@ describe('during the koersdag', () => {
       verdict: 'changed',
       photoCheck: { matches: false, differences: ['Quota Fleur 3,2 → 4,1'] },
     })
+
+    // What was read from the board reaches the next visitor's advice for the same omloop
+    expect(db.board).toEqual([
+      { draverijId: id, reading: expect.objectContaining({ omloop: 1, userId: user.id, quota: ['3 Fleur: winnend 4,1'] }) },
+    ])
+    await start(friend)
+    vi.mocked(askClaude).mockResolvedValueOnce(KEPT)
+    await runWorker()
+    const friendSystem = vi.mocked(askClaude).mock.calls[2][1].system
+    expect(friendSystem).toContain('(foto van een andere bezoeker)')
+    expect(friendSystem).toContain('- 3 Fleur: winnend 4,1')
   })
 
   it('moves to the next omloop and records an unreadable reply as an error', async () => {

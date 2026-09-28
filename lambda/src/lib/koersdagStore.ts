@@ -1,7 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
-import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb'
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb'
 import type { Alias } from './http'
-import type { KoersdagRecord } from './koersdag'
+import type { BoardReading, KoersdagRecord } from './koersdag'
 import { tableName } from './store'
 
 // Koersdag items in the single table:
@@ -52,4 +52,50 @@ export async function putKoersdag(
     if (err instanceof Error && err.name === 'ConditionalCheckFailedException') throw new KoersdagChangedError()
     throw err
   }
+}
+
+// Bordfoto readings, shared by everyone on the same koersdag:
+//   DRAVERIJ#<draverijId> / BORD#<omloop>#<readAt>#<id>   quota/loting read from a photo (TTL: expiresAt)
+
+const BOARD_KEEP_SECONDS = 2 * 24 * 60 * 60
+const boardPrefix = (omloop: number) => `BORD#${String(omloop).padStart(2, '0')}#`
+
+export async function putBoardReading(alias: Alias, draverijId: string, reading: BoardReading): Promise<void> {
+  await doc.send(
+    new PutCommand({
+      TableName: tableName(alias),
+      Item: {
+        pk: `DRAVERIJ#${draverijId}`,
+        sk: `${boardPrefix(reading.omloop)}${reading.readAt}#${reading.id}`,
+        ...reading,
+        expiresAt: Math.floor(Date.now() / 1000) + BOARD_KEEP_SECONDS,
+      },
+    }),
+  )
+}
+
+// Newest first
+export async function listBoardReadings(
+  alias: Alias,
+  draverijId: string,
+  omloop: number,
+  limit = 3,
+): Promise<BoardReading[]> {
+  const res = await doc.send(
+    new QueryCommand({
+      TableName: tableName(alias),
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+      ExpressionAttributeValues: { ':pk': `DRAVERIJ#${draverijId}`, ':prefix': boardPrefix(omloop) },
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  )
+  return (res.Items ?? []).map(({ id, omloop: o, userId, readAt, quota, loting }) => ({
+    id,
+    omloop: o,
+    userId,
+    readAt,
+    quota,
+    loting,
+  })) as BoardReading[]
 }
