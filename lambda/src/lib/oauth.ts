@@ -84,12 +84,24 @@ export function baseUrlOf(event: APIGatewayProxyEvent): string {
 // The consent page lives in the app of the same environment
 export const frontendOf = (alias: Alias) => (alias === 'prod' ? 'https://kortebaan.nl' : 'https://test.kortebaan.nl')
 
-export const resourceOf = (base: string) => `${base}/mcp`
+// The MCP server runs on its own Lambda Function URL. AWS renames a Lambda's WWW-Authenticate
+// header (x-amzn-Remapped-…), so MCP clients fall back to /.well-known/oauth-protected-resource
+// at the host root, which API Gateway (stage in every path) cannot serve. CDK passes the URL per alias; without it (tests), <base>/mcp.
+export function mcpUrlOf(alias: Alias, base: string): string {
+  return process.env[alias === 'prod' ? 'KB_MCP_URL_PROD' : 'KB_MCP_URL_DEV'] ?? `${base}/mcp`
+}
 
-export function protectedResourceMetadata(base: string) {
+// The authorization server (the API Gateway stage of this alias), as seen from the MCP server
+export function issuerOf(alias: Alias): string {
+  const issuer = process.env[alias === 'prod' ? 'OAUTH_ISSUER_PROD' : 'OAUTH_ISSUER_DEV']
+  if (!issuer) throw new Error('OAUTH_ISSUER ontbreekt')
+  return issuer
+}
+
+export function protectedResourceMetadata(resource: string, issuer: string) {
   return {
-    resource: resourceOf(base),
-    authorization_servers: [base],
+    resource,
+    authorization_servers: [issuer],
     scopes_supported: Object.keys(SCOPES),
     bearer_methods_supported: ['header'],
     resource_name: 'KorteBaan kennisbank',
@@ -143,7 +155,7 @@ export async function grantUser(alias: Alias, grant: OAuthGrant): Promise<{ user
   return scopes.length ? { user, scopes } : null
 }
 
-export async function authenticateBearer(alias: Alias, event: APIGatewayProxyEvent) {
+export async function authenticateBearer(alias: Alias, event: Pick<APIGatewayProxyEvent, 'headers'>) {
   const header = event.headers?.['Authorization'] ?? event.headers?.['authorization'] ?? ''
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
   if (!token) return null
