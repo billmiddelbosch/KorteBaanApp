@@ -3,6 +3,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
+import * as dsql from 'aws-cdk-lib/aws-dsql'
 import * as events from 'aws-cdk-lib/aws-events'
 import * as targets from 'aws-cdk-lib/aws-events-targets'
 import * as s3 from 'aws-cdk-lib/aws-s3'
@@ -266,6 +267,31 @@ export class ApiStack extends cdk.Stack {
       })
     }
 
+    // ── Kennisbank (one Aurora DSQL cluster shared by dev and prod) ──────────
+    // Schema, roles and the IAM mapping of kbIngest are applied with `cd lambda && npm run kb-migrate`.
+    const kbCluster = new dsql.CfnCluster(this, 'KennisbankCluster', {
+      deletionProtectionEnabled: true,
+      tags: [{ key: 'Name', value: `${PROJECT}-kennisbank` }],
+    })
+    kbCluster.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN)
+    const kbHost = `${kbCluster.attrIdentifier}.dsql.${this.region}.on.aws`
+
+    // Adds the results of recent draverijen (kortebaanbond.nl pdf's + weather) to the kennisbank.
+    // Runs once for both environments, so the rule targets the function itself, not an alias.
+    const kbIngestFn = makeFn(
+      'KbIngestFunction',
+      'kbIngest',
+      'kbIngest.handler',
+      'Kennisbank: results of recent draverijen from kortebaanbond.nl',
+      { memorySize: 1024, timeout: cdk.Duration.minutes(5), environment: { KB_HOST: kbHost } },
+    )
+    kbIngestFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['dsql:DbConnect'], resources: [kbCluster.attrResourceArn] }))
+    new events.Rule(this, 'KbIngest', {
+      description: 'Daily kennisbank ingest of recent draverijen',
+      schedule: events.Schedule.cron({ minute: '0', hour: '5' }),
+      targets: [new targets.LambdaFunction(kbIngestFn, { retryAttempts: 1 })],
+    })
+
     const functions = [healthFn, ...accountFunctions]
 
     // ── Lambda aliases ───────────────────────────────────────────────────────
@@ -391,6 +417,11 @@ export class ApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiUrlProd', {
       value: prodStage.urlForPath('/'),
       description: 'VITE_API_BASE_URL for the Amplify production branch',
+    })
+    new cdk.CfnOutput(this, 'KbEndpoint', { value: kbHost, description: 'Kennisbank DSQL endpoint (--host for kb-migrate/kb-backfill)' })
+    new cdk.CfnOutput(this, 'KbIngestRoleArn', {
+      value: kbIngestFn.role!.roleArn,
+      description: '--writer-arn for kb-migrate',
     })
   }
 }
