@@ -12,11 +12,11 @@ import {
   isValidChallenge,
   isValidRedirectUri,
   issueTokens,
+  mcpUrlOf,
   newClientId,
   newSecret,
   protectedResourceMetadata,
   redirectMatches,
-  resourceOf,
   SCOPES,
   verifyPkce,
 } from './lib/oauth'
@@ -156,7 +156,7 @@ async function readAuthorize(req: RouteRequest, source: Record<string, unknown>)
     throw new HttpError(400, 'Deze app gebruikt geen veilige koppeling (PKCE). Koppelen kan niet.')
   }
   const resource = text(source.resource)
-  if (resource && resource.replace(/\/$/, '') !== resourceOf(baseUrlOf(req.event))) {
+  if (resource && resource.replace(/\/$/, '') !== mcpUrlOf(req.alias, baseUrlOf(req.event))) {
     throw new HttpError(400, 'Deze app vraagt toegang tot een onbekende dienst.')
   }
   const params: AuthorizeParams = { clientId, redirectUri, state: text(source.state), codeChallenge: challenge, scope: text(source.scope) }
@@ -219,7 +219,7 @@ export async function handler(event: APIGatewayProxyEvent, context: Context): Pr
     const base = baseUrlOf(event)
     switch (route) {
       case 'GET /.well-known/oauth-protected-resource':
-        return publicJson(200, protectedResourceMetadata(base))
+        return publicJson(200, protectedResourceMetadata(mcpUrlOf(alias, base), base))
       case 'GET /.well-known/oauth-authorization-server':
       case 'GET /.well-known/openid-configuration':
         return publicJson(200, authorizationServerMetadata(base, alias))
