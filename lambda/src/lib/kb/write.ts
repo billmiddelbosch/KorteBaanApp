@@ -264,11 +264,17 @@ export async function listLessons(client: pg.Client, env: Env, limit: number): P
   }))
 }
 
-export async function removeLesson(client: pg.Client, env: Env, id: string): Promise<boolean> {
-  if (!UUID.test(id)) return false
-  const res = await client.query(`update kb.lesson set status = 'verwijderd' where id = $1 and origin = $2 and status <> 'verwijderd'`, [id, env])
+export const LESSON_STATUSES = ['actief', 'vervangen', 'betwist', 'verwijderd'] as const
+export type LessonStatus = (typeof LESSON_STATUSES)[number]
+
+// Changes the status of a lesson of this environment; false when it doesn't exist or already has that status
+export async function setLessonStatus(client: pg.Client, env: Env, id: string, status: LessonStatus): Promise<boolean> {
+  if (!UUID.test(id) || !LESSON_STATUSES.includes(status)) return false
+  const res = await client.query(`update kb.lesson set status = $3 where id = $1 and origin = $2 and status <> $3`, [id, env, status])
   return (res.rowCount ?? 0) > 0
 }
+
+export const removeLesson = (client: pg.Client, env: Env, id: string) => setLessonStatus(client, env, id, 'verwijderd')
 
 // ── Predictions ──────────────────────────────────────────────────────────
 

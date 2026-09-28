@@ -102,6 +102,7 @@ Stand na fase 1: een draverij heeft `detail` `volledig` (rittenverloop-pdf), `ui
 | `kb_search(tekst)` | read | Zoeken in claims en lessen (`ILIKE`) |
 | `kb_record_claim(...)` | write | Feit met subjects, predicate, bron, betrouwbaarheid |
 | `kb_record_lesson(...)` | write | Les met subjects, scope en bewijs |
+| `kb_lesson_status(id, status)` | write | Status van een les van deze omgeving: actief, vervangen, betwist of verwijderd (alleen MCP) |
 | `kb_resolve(naam)` | write | Twijfelgeval in entity resolution toewijzen of samenvoegen |
 | `kb_sql(query)` | sql | Alleen-lezen SQL als `kb_reader` in een `READ ONLY`-transactie, met rijlimiet en client-side timeout |
 
@@ -160,7 +161,7 @@ Resources: `kb://schema` (tabellen en betekenis), `kb://reglement`, `kb://entity
 3. **MCP + OAuth** — ✅ gebouwd, nog niet gedeployd.
    - `oauth`: discovery (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration` onder de stage), dynamic client registration (alleen publieke clients, redirect https of loopback), authorization code + PKCE S256, access token 1 uur, refresh token 30 dagen en roterend. Tokens gehasht in de app-tabel met TTL. Bij elk gebruik worden status, `tokenVersion` en rol opnieuw gecontroleerd; een vriend houdt alleen `kb:read`.
    - Toestemmingspagina `/oauth/authorize` in de Vue-app (inloggen vereist, daarna Toestaan/Weigeren).
-   - `kbMcp`-tools: `kb_field`, `kb_entity`, `kb_matchups`, `kb_conditions`, `kb_search`, `kb_lessons` (read), `kb_record_claim`, `kb_record_lesson` (write), `kb_sql` (sql, als `kb_reader`, max. 200 rijen, 10 s). Resource `kb://schema`. Claims via MCP krijgen bron `ai-mcp`.
+   - `kbMcp`-tools: `kb_field`, `kb_entity`, `kb_matchups`, `kb_conditions`, `kb_search`, `kb_lessons` (read), `kb_record_claim`, `kb_record_lesson`, `kb_lesson_status` (write), `kb_sql` (sql, als `kb_reader`, max. 200 rijen, 10 s). Resource `kb://schema`. Claims via MCP krijgen bron `ai-mcp`.
    - `kb-migrate --reader-arn` met output `KbReaderRoleArns`; de MCP-url staat in output `McpUrlProd` en in `.mcp.json`.
    - Uitgesteld: `kb_form`, `kb_head_to_head`, `kb_pikeur_stats`, `kb_resolve`, resources `kb://reglement` en `kb://entity/…`.
 4. **Curatie-UI** — tabblad "Kennisbank" voor de eigenaar
