@@ -101,7 +101,10 @@ export const MCP_TOOLS: McpTool[] = [
 const SCHEMA_NOTES = `Alle tabellen staan in schema \`kb\`. Kolom \`origin\`: 'shared' = officiële data (uitslagen, weer),
 'dev'/'prod' = door de AI of eigenaar vastgelegd in die omgeving. Claims en lessen hebben een \`status\`
 (actief, vervangen, betwist, verwijderd); gebruik meestal \`status = 'actief'\`. Koppels zijn tweekampen (a tegen b)
-binnen een draverij; \`winner\` is 'a' of 'b'. Namen staan genormaliseerd in \`kb.alias\`.`
+binnen een draverij; \`winner\` is 'a' of 'b'. Namen staan genormaliseerd in \`kb.alias\`.
+\`koppel.zijde_a\`/\`zijde_b\` = baan (links/rechts, gezien vanaf de start) in rit 1 en de kamprit; in rit 2 omgekeerd.
+Bekend vanaf 2025 (Medemblik alle jaren) bij gelijke afstand, anders leeg. View \`kb.rit_zijde\` geeft de zijde per rit
+en \`zijde_winnaar\`.`
 
 export type RpcId = string | number | null
 export interface RpcResponse {

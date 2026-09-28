@@ -2,6 +2,7 @@
 // Shared by the daily kbIngest Lambda and the one-off backfill script.
 import { KBB, parseEventPage, type EventPage } from './kbbond'
 import { pdfLines } from './pdf'
+import { parseProgramma, type Programma } from './programma'
 import { eventRecord, type DraverijRecord } from './record'
 import { parseRitverloop, type Ritverloop } from './ritverloop'
 import { parseUitslagPdf, type UitslagPdf } from './uitslagPdf'
@@ -59,4 +60,12 @@ export async function loadEvent(path: string, place?: string): Promise<LoadedEve
   }
   const record = eventRecord(eventIdOf(path), url, page, { ritverloop, uitslag }, place ?? page.place)
   return { page, record, warnings }
+}
+
+// The programma of an upcoming draverij, or null while it is not published yet
+export async function loadProgramma(path: string): Promise<Programma | null> {
+  const page = parseEventPage(await fetchText(absolute(path)))
+  if (!page?.pdfs.startlijst) return null
+  const programma = parseProgramma(await pdfLines(await fetchBytes(page.pdfs.startlijst)))
+  return programma.entries.length ? programma : null
 }

@@ -6,6 +6,7 @@ import type pg from 'pg'
 import { insertMany, tx } from './db'
 import { DETAIL_RANK, RELIABILITY, type DraverijRecord, type HorseRef, type Ref, type SourceRef } from './record'
 import { nameKey } from './text'
+import { zijdeOf } from './zijde'
 
 export type EntityKind = 'horse' | 'pikeur' | 'stal'
 
@@ -249,29 +250,36 @@ export async function writeRecord(client: pg.Client, resolver: Resolver, record:
         omloop_bereikt = excluded.omloop_bereikt, klassering = excluded.klassering, prijs = excluded.prijs,
         punten = excluded.punten, origin = 'shared', source_id = excluded.source_id`,
     )
+    const starters = new Map(unique.map(({ d, horse }) => [horse, d]))
     const ritSrc = record.sources.find((s) => s.kind === 'kbb_ritverloop_pdf')
     const koppelSrc = ritSrc ? sourceId(ritSrc.url) : src
     await insertMany(
       c,
       'kb.koppel',
-      ['id', 'draverij_id', 'omloop', 'nr', 'beslissend', 'horse_a', 'horse_b', 'pikeur_a', 'pikeur_b', 'bijgeloot_a', 'bijgeloot_b', 'winner', 'source_id'],
-      koppels.map(({ k, id, a, b, pikeurA, pikeurB, winner }) => [
-        id,
-        record.id,
-        k.omloop,
-        k.nr,
-        k.beslissend,
-        a,
-        b,
-        pikeurA,
-        pikeurB,
-        k.bijgelootA,
-        k.bijgelootB,
-        winner,
-        koppelSrc,
-      ]),
+      ['id', 'draverij_id', 'omloop', 'nr', 'beslissend', 'horse_a', 'horse_b', 'pikeur_a', 'pikeur_b', 'bijgeloot_a', 'bijgeloot_b', 'zijde_a', 'zijde_b', 'winner', 'source_id'],
+      koppels.map(({ k, id, a, b, pikeurA, pikeurB, winner }) => {
+        const zijde = zijdeOf(record.date, record.baan.id, starters.get(a), b ? starters.get(b) : undefined)
+        return [
+          id,
+          record.id,
+          k.omloop,
+          k.nr,
+          k.beslissend,
+          a,
+          b,
+          pikeurA,
+          pikeurB,
+          k.bijgelootA,
+          k.bijgelootB,
+          zijde.a,
+          zijde.b,
+          winner,
+          koppelSrc,
+        ]
+      }),
       `on conflict (id) do update set horse_a = excluded.horse_a, horse_b = excluded.horse_b, pikeur_a = excluded.pikeur_a,
         pikeur_b = excluded.pikeur_b, bijgeloot_a = excluded.bijgeloot_a, bijgeloot_b = excluded.bijgeloot_b,
+        zijde_a = coalesce(excluded.zijde_a, kb.koppel.zijde_a), zijde_b = coalesce(excluded.zijde_b, kb.koppel.zijde_b),
         winner = excluded.winner, beslissend = excluded.beslissend, status = 'definitief', origin = 'shared', source_id = excluded.source_id`,
     )
     await insertMany(
