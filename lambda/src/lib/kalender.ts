@@ -8,6 +8,7 @@ export interface KalenderEntry {
   place: string
   date: string
   cancelled: boolean
+  event: string | null // path of the event page, e.g. "/events/108/tzand-2026"
 }
 
 const MONTHS: Record<string, number> = {
@@ -56,6 +57,7 @@ export function parseKalender(html: string): KalenderEntry[] {
       place,
       date: `${year}-${String(month).padStart(2, '0')}-${day[1]!.padStart(2, '0')}`,
       cancelled: /afgelast/i.test(textOf(cells[1]!)),
+      event: /href="(\/events\/\d+\/[^"]+)"/i.exec(row!)?.[1] ?? null,
     })
   }
   return entries

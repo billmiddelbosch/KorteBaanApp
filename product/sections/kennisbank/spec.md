@@ -60,6 +60,8 @@ De voorverkenning is gericht: alleen op paarden die meedoen, vlak voor het momen
 
 Detailniveau: 2023 → volledig (koppels en ritten); 2022 deelnemers en eindvolgorde; 2016–2021 alleen eindklasseringen/winnaars (akkoord eigenaar). Startpositie is historisch onbekend en wordt vanaf nu vastgelegd.
 
+Stand na fase 1: een draverij heeft `detail` `volledig` (rittenverloop-pdf), `uitslag` (uitslag-pdf of de uitslagtabel van de eventpagina) of `winnaar` (statistieken). Een lager niveau overschrijft nooit een hoger. De backfill-dry-run (28-09-2026) vond 105 eventpagina's van 25 kortebanen en 227 draverijen sinds 2016: 98 volledig (2023 →) en 129 alleen winnaar. ZEturf (2022) en de verenigingssites zijn uitgesteld, omdat de statistieken de winnaars sinds 2009 al dekken. Kortebanen die niet meer op de kalender van dit jaar staan, worden niet gevonden.
+
 ## Architectuur
 - **Opslag**: één Aurora DSQL-cluster (Postgres 16-compatibel, serverless, free tier) in `eu-west-2`, als één `aws_dsql.CfnCluster` in `infra/lib/api-stack.ts` met deletion protection en `RemovalPolicy.RETAIN`; deploy gaat mee met `npm run deploy`. DynamoDB blijft per omgeving voor app-state (accounts, chats, koersdag, advies).
 - **Eén kennisbank voor `dev` en `prod`**:
@@ -121,10 +123,14 @@ Resources: `kb://schema` (tabellen en betekenis), `kb://reglement`, `kb://entity
    - De bronnen zijn onderzocht (zie Databronnen).
    - Het DSQL-prototype in `eu-west-2` werkt: verbinding met IAM-token (~0,5 s), JSONB-operators, `ILIKE`, CTE's met window functions, views, foreign keys (worden gehandhaafd), een `ASYNC`-index, 2.500 rijen in één insert en een read-only rol via `AWS IAM GRANT` (schrijven en DDL worden geweigerd).
    - Niet ondersteund: `SET statement_timeout` en `SET TRANSACTION`. `BEGIN READ ONLY` werkt wel.
-1. **Schema + ingest + backfill**
-   - DSQL-cluster en rollen in CDK, `lib/kb/` en migraties.
-   - Parsers voor ritverloop-pdf, uitslag-pdf, ZEturf, verenigingssites en weer.
-   - Backfill 2016 → en entity resolution.
+1. **Schema + ingest + backfill** — ✅ gebouwd, nog niet gedeployd.
+   - DSQL-cluster (`KennisbankCluster`, deletion protection, RETAIN) in CDK.
+   - Schema `kb` met rollen `kb_writer`/`kb_reader` in `lambda/src/lib/kb/migrations.ts`, uitgevoerd met `npm run kb-migrate`.
+   - Parsers voor eventpagina, rittenverloop-pdf, uitslag-pdf en Open-Meteo.
+   - Entity resolution: Kortebaanbond-id → genormaliseerde naam → alias. Verminkte pdf-namen worden gekoppeld aan de schone spelling.
+   - `kbIngest` draait dagelijks om 05:00 UTC over de draverijen van de laatste 21 dagen (of handmatig met `{"event": "/events/…"}`). Het is één functie voor dev en prod.
+   - `npm run kb-backfill` doet de eenmalige backfill. Met `--dry-run` wordt alleen opgehaald en geparsed.
+   - Uitgesteld: ZEturf- en verenigingssite-parsers.
 2. **Dossier + tools in de workers + ratings**
    - Custom tools in `askClaude`; het dossier in Analysechat en Koersdag; het `<feiten>`-blok eruit.
    - Loting en uitslagbord worden live voorlopige data, met de startzijde uit de lotingfoto.
