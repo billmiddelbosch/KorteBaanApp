@@ -216,8 +216,9 @@ function fillFromRitverloop(record: DraverijRecord, r: Ritverloop) {
         omloop: omloop.nr,
         nr: k.nr,
         beslissend: omloop.beslissend,
-        a: a.name,
-        b: b?.name ?? null,
+        // The name from the horse's first row, so a glitch in a later row makes no second horse
+        a: nameOf(k.a),
+        b: k.b === null ? null : nameOf(k.b),
         pikeurA: a.riders[0] ?? null,
         pikeurB: b?.riders[0] ?? null,
         bijgelootA: a.bijgeloot,

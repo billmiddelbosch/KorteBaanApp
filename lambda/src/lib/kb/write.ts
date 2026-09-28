@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import { slugify } from '../analysis'
 import { insertMany, tx } from './db'
-import { currentRatings, day, resolveNames, type Env, type Named, type Subject } from './queries'
+import { currentRatings, day, resolveNames, type Env, type Named, type Origin, type Subject } from './queries'
 import { winChance } from './glicko'
 import { sourceId } from './store'
 import { nameKey } from './text'
@@ -264,11 +264,17 @@ export async function listLessons(client: pg.Client, env: Env, limit: number): P
   }))
 }
 
-export async function removeLesson(client: pg.Client, env: Env, id: string): Promise<boolean> {
-  if (!UUID.test(id)) return false
-  const res = await client.query(`update kb.lesson set status = 'verwijderd' where id = $1 and origin = $2 and status <> 'verwijderd'`, [id, env])
+export const LESSON_STATUSES = ['actief', 'vervangen', 'betwist', 'verwijderd'] as const
+export type LessonStatus = (typeof LESSON_STATUSES)[number]
+
+// Changes the status of a lesson of this environment; false when it doesn't exist or already has that status
+export async function setLessonStatus(client: pg.Client, env: Env, id: string, status: LessonStatus): Promise<boolean> {
+  if (!UUID.test(id) || !LESSON_STATUSES.includes(status)) return false
+  const res = await client.query(`update kb.lesson set status = $3 where id = $1 and origin = $2 and status <> $3`, [id, env, status])
   return (res.rowCount ?? 0) > 0
 }
+
+export const removeLesson = (client: pg.Client, env: Env, id: string) => setLessonStatus(client, env, id, 'verwijderd')
 
 // ── Predictions ──────────────────────────────────────────────────────────
 
@@ -278,7 +284,7 @@ export interface Kans {
   links: string
   rechts: string
   // Chance that `links` wins the koppel, 0–1
-  winkansLinks: number
+  winkansLinks: number | null // null: no AI chance (the pipeline's rating-only prediction)
   quotaLinks: number | null
   quotaRechts: number | null
 }
@@ -302,7 +308,7 @@ async function horsesFor(client: pg.Client, names: string[]): Promise<Map<string
   return resolved
 }
 
-export async function recordPredictions(client: pg.Client, env: Env, draverijId: string, kansen: Kans[], adviesRef: string | null): Promise<number> {
+export async function recordPredictions(client: pg.Client, env: Origin, draverijId: string, kansen: Kans[], adviesRef: string | null): Promise<number> {
   if (!kansen.length) return 0
   const names = [...new Set(kansen.flatMap((k) => [k.links, k.rechts]))]
   const horses = await horsesFor(client, names)
@@ -324,7 +330,7 @@ export async function recordPredictions(client: pg.Client, env: Env, draverijId:
       k.omloop,
       a.id,
       b?.id ?? null,
-      clamp(k.winkansLinks, 0, 1),
+      k.winkansLinks === null ? null : clamp(k.winkansLinks, 0, 1),
       ra && rb ? winChance(ra, rb) : null,
       toteChance(k.quotaLinks, k.quotaRechts),
       adviesRef,

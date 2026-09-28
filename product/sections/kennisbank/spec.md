@@ -32,6 +32,7 @@ De historie wordt eenmalig gevuld (backfill) en daarna doorlopend bijgewerkt; er
 | Wanneer | Wat | Hoe |
 |---|---|---|
 | Na elke draverij (dag erna) | Officiële koppels, ritten, uitslag, totalisator, weer; ratings herberekend | `kbIngest`, scrapers zonder AI |
+| 0–3 dagen vóór een draverij, dagelijks (zodra het programma er is) | Ratingkans (`p_rating`) per koppel van de eerste omloop in `kb.prediction` (origin `shared`, `advies_ref` `programma`), elke dag opnieuw met de nieuwste ratings tot er uitslagen zijn | `kbIngest`, uit de programma-pdf, zonder AI |
 | Tijdens het seizoen, wekelijks | Starts van bekende kortebaanpaarden in gewone drafkoersen (vorm buiten de kortebaan) | Scraper op ZEturf/profielpagina's, zonder AI |
 | 1–2 dagen vóór een draverij (zodra de deelnemerslijst bekend is, via `kalenderSync`) | Voorverkenning: per deelnemer nieuws, blessures, pikeurwissels, recente vorm sinds de laatste bekende start | AI-zoektocht als achtergrondjob → claims met bron |
 | Bij elke analyse | Alles van vandaag | Verplichte realtime zoektocht in de analyse zelf |
@@ -48,6 +49,7 @@ De voorverkenning is gericht: alleen op paarden die meedoen, vlak voor het momen
 | Bron | Periode | Inhoud | Ophalen |
 |---|---|---|---|
 | Kortebaanbond ritverloop-pdf | 2023 → | Per omloop de koppels, ritten I/II/III (best of 3), afstand, pikeur, loting, bijgeloot (B) | Links van `/events/<id>/<slug>`-pagina's (bestandsnamen zijn onregelmatig, niet raden); tekstlaag uit pdf |
+| Kortebaanbond programma-pdf | vanaf nu | Startlijst: startnr, naam, leeftijd, afstand, pikeur, trainer, eigenaar; daarna de uitgelote reserves. Startnr 1–2, 3–4, … vormen de koppels van de eerste omloop | Link "programma"/"startlijst" op de eventpagina, een paar dagen vóór de draverij |
 | Kortebaanbond uitslag-pdf | 2023 → | Eindklassering met leeftijd/geslacht, pikeur, eigenaar, afstand, prijzengeld, totalisator-uitbetalingen per omloop, totale omzet | Idem |
 | Kortebaanbond eventpagina | 2009 → (alleen winnaars) | "Statistieken sinds 2009": jaar, starters, datum, totalisator, winnaar, rijder | HTML |
 | Kortebaanbond paard-/pikeurprofielen | 2023 → | Starts per paard: datum, baan, pikeur, klassering, punten, winsom | HTML (`/horses/<id>`, `/riders/<id>`) — voor aliassen/identiteit |
@@ -59,6 +61,15 @@ De voorverkenning is gericht: alleen op paarden die meedoen, vlak voor het momen
 | AI web search | live | Nieuws, blessures, afmeldingen, pikeurwissels | Claims met bron en betrouwbaarheid |
 
 Detailniveau: 2023 → volledig (koppels en ritten); 2022 deelnemers en eindvolgorde; 2016–2021 alleen eindklasseringen/winnaars (akkoord eigenaar). Startpositie is historisch onbekend en wordt vanaf nu vastgelegd.
+
+Eigenaardigheden van de rittenverloop-pdf (bij de parser gedocumenteerd, met fixtures voor Roden, Stompwijk en Lisse 2026):
+- De winstmarkering is een `X` of een kleine `x`; `x DH` is een dead heat (de rit telt voor geen van beide).
+- In de B-kolom staat soms een onverklaarde `S`, soms aan de positie vastgeplakt (`S11`). Eén hoofdletter links van de getallen is een markering, nooit een deel van de naam.
+- `NIET STARTER`/`NIET GESTART` in de rijderkolom: geen pikeur, en de tegenstander wint het koppel (walkover).
+- 2023-pdf's hebben de kolomkoppen `1e 2e Kamprit` in plaats van `I II III`. Sommige pdf's hebben geen kop `UITSLAG:`; een plaatslabel (`1e:`) markeert dan de uitslag.
+- Geeft de markering geen winnaar (1–1 of een ontbrekende X), dan is de winnaar het paard dat in de volgende omloop rijdt (niet voor de beslissende omloop).
+- Namen verschillen soms per bron ("Liberty Newport" vs. "Liberty Newport TF"); de naam uit de eerste rij van een paard geldt voor al zijn koppels.
+- De baanzijde (links/rechts) staat in geen enkele pdf, maar volgt uit het wedstrijdreglement (art. 22, per 18-02-2025): bij gelijke afstand start het laagste startnummer in rit 1 en de kamprit rechts (gezien vanaf de start), in rit 2 links. `kbIngest` vult `zijde_a`/`zijde_b` (= zijde in rit 1) voor draverijen vanaf 2025 en voor Medemblik alle jaren (bijlage OB-1, aug. 2020); migratie `003-zijde` vulde de bestaande koppels. Bij ongelijke afstand of vóór 2025 op andere banen blijft de zijde leeg. View `kb.rit_zijde` geeft de zijde per rit en van de winnaar; de startzijde-statistiek telt ritten.
 
 Stand na fase 1: een draverij heeft `detail` `volledig` (rittenverloop-pdf), `uitslag` (uitslag-pdf of de uitslagtabel van de eventpagina) of `winnaar` (statistieken). Een lager niveau overschrijft nooit een hoger. De backfill-dry-run (28-09-2026) vond 105 eventpagina's van 25 kortebanen en 227 draverijen sinds 2016: 98 volledig (2023 →) en 129 alleen winnaar. ZEturf (2022) en de verenigingssites zijn uitgesteld, omdat de statistieken de winnaars sinds 2009 al dekken. Kortebanen die niet meer op de kalender van dit jaar staan, worden niet gevonden.
 
@@ -91,6 +102,7 @@ Stand na fase 1: een draverij heeft `detail` `volledig` (rittenverloop-pdf), `ui
 | `kb_search(tekst)` | read | Zoeken in claims en lessen (`ILIKE`) |
 | `kb_record_claim(...)` | write | Feit met subjects, predicate, bron, betrouwbaarheid |
 | `kb_record_lesson(...)` | write | Les met subjects, scope en bewijs |
+| `kb_lesson_status(id, status)` | write | Status van een les van deze omgeving: actief, vervangen, betwist of verwijderd (alleen MCP) |
 | `kb_resolve(naam)` | write | Twijfelgeval in entity resolution toewijzen of samenvoegen |
 | `kb_sql(query)` | sql | Alleen-lezen SQL als `kb_reader` in een `READ ONLY`-transactie, met rijlimiet en client-side timeout |
 
@@ -138,6 +150,7 @@ Resources: `kb://schema` (tabellen en betekenis), `kb://reglement`, `kb://entity
    - Lessen staan in de kennisbank (`kb.lesson`) in plaats van DynamoDB; `kb-migrate --lessons-table` zet de oude over.
    - Glicko-2 met backtest in `kb.meta` (`rating_backtest`). Ratings komen pas in het dossier bij ≥ 100 koppels en een Brier-score < 0,24.
    - `kbIngest` scoort voorspellingen van gewijzigde draverijen en herberekent de ratings. `{"ratings": true}` herberekent alleen.
+   - Werkafspraak: vóór elke draverij staat `p_rating` per koppel van de eerste omloop in `kb.prediction`. `kbIngest` leest daarvoor dagelijks de programma-pdf van de draverijen van vandaag t/m over 3 dagen (origin `shared`, geen AI). Latere omlopen krijgen alleen een voorspelling via Koersdag.
    - KB_HOST en `dsql:DbConnect` gelden voor alle kennisbank-schrijvers (output `KbWriterRoleArns`).
    - Uitgesteld:
      - loting en uitslagbord als live voorlopige data, met de startzijde uit de lotingfoto
@@ -148,7 +161,7 @@ Resources: `kb://schema` (tabellen en betekenis), `kb://reglement`, `kb://entity
 3. **MCP + OAuth** — ✅ gebouwd, nog niet gedeployd.
    - `oauth`: discovery (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration` onder de stage), dynamic client registration (alleen publieke clients, redirect https of loopback), authorization code + PKCE S256, access token 1 uur, refresh token 30 dagen en roterend. Tokens gehasht in de app-tabel met TTL. Bij elk gebruik worden status, `tokenVersion` en rol opnieuw gecontroleerd; een vriend houdt alleen `kb:read`.
    - Toestemmingspagina `/oauth/authorize` in de Vue-app (inloggen vereist, daarna Toestaan/Weigeren).
-   - `kbMcp`-tools: `kb_field`, `kb_entity`, `kb_matchups`, `kb_conditions`, `kb_search`, `kb_lessons` (read), `kb_record_claim`, `kb_record_lesson` (write), `kb_sql` (sql, als `kb_reader`, max. 200 rijen, 10 s). Resource `kb://schema`. Claims via MCP krijgen bron `ai-mcp`.
+   - `kbMcp`-tools: `kb_field`, `kb_entity`, `kb_matchups`, `kb_conditions`, `kb_search`, `kb_lessons` (read), `kb_record_claim`, `kb_record_lesson`, `kb_lesson_status` (write), `kb_sql` (sql, als `kb_reader`, max. 200 rijen, 10 s). Resource `kb://schema`. Claims via MCP krijgen bron `ai-mcp`.
    - `kb-migrate --reader-arn` met output `KbReaderRoleArns`; de MCP-url staat in output `McpUrlProd` en in `.mcp.json`.
    - Uitgesteld: `kb_form`, `kb_head_to_head`, `kb_pikeur_stats`, `kb_resolve`, resources `kb://reglement` en `kb://entity/…`.
 4. **Curatie-UI** — tabblad "Kennisbank" voor de eigenaar

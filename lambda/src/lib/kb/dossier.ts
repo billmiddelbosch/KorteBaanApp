@@ -113,7 +113,7 @@ export function formatEdition(e: BaanEdition): string {
 export function formatSides(s: SideStats): string | null {
   const total = s.links + s.rechts
   if (total < 10) return null
-  return `Koppels gewonnen vanaf links ${s.links}, vanaf rechts ${s.rechts} (${pct(s.links / total)} links).`
+  return `Ritten gewonnen vanaf links ${s.links}, vanaf rechts ${s.rechts} (${pct(s.links / total)} links).`
 }
 
 export function formatLessons(lessons: LessonRow[]): string[] {

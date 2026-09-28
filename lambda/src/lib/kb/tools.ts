@@ -196,7 +196,7 @@ export function kbTools(ctx: ToolContext, mode: ToolMode): { tools: CustomTool[]
       const [history, sides] = await Promise.all([baanHistory(client, baanId, 12), sideStats(client, baanId)])
       if (!history.name) return `Kortebaan "${place}" staat niet in de kennisbank.`
       const lines = [`### ${history.name}`, ...history.editions.map((e) => `- ${formatEdition(e)}`)]
-      lines.push(formatSides(sides) ?? 'Startzijde: te weinig koppels met bekende zijde.')
+      lines.push(formatSides(sides) ?? 'Startzijde: te weinig ritten met bekende zijde.')
       return lines.join('\n')
     },
     kb_search: async (input) => {

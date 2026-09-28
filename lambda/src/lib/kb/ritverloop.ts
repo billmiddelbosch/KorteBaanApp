@@ -6,10 +6,13 @@
 // the rijder, and the X marks are matched to the nearest I/II/III header. X marks are sometimes
 // printed a few points above or below the name; those go to the nearest name line.
 //   Eerste omloop:  [koppelnr] startnr  naam  afstand  rijder  X X
-//   Later omlopen:  [B] positie  loting(=startnr)  naam  afstand  rijder  X X   (B = bijgeloot)
+//   Later omlopen:  [B|S] positie  loting(=startnr)  naam  afstand  rijder  X X   (B = bijgeloot)
+// Some pdf's print the marks as a lowercase "x", and some put an unexplained "S" in the B column:
+// a single capital letter left of the numbers is a marker, never part of the name. "NIET STARTER"
+// in the rijder column means the horse did not start: no pikeur, and the opponent wins the koppel.
 // Koppels are consecutive positions (1–2, 3–4, …); in the beslissende omloop 1–2 rijden om de
 // 1e plaats, 3–4 om de 3e.
-import { lineText, type PdfLine } from './pdf'
+import { lineText, type PdfItem, type PdfLine } from './pdf'
 import { cleanName, parseEuro } from './text'
 
 export interface RitverloopRow {
@@ -19,6 +22,7 @@ export interface RitverloopRow {
   afstand: number
   riders: string[]
   bijgeloot: boolean
+  nietGestart: boolean
   wins: number[] // rit numbers (1–3) won
 }
 
@@ -57,6 +61,9 @@ export interface Ritverloop {
 const SECTION = /^(EERSTE|TWEEDE|DERDE|VIERDE|VIJFDE|ZESDE|BESLISSENDE|FINALE)\b.*OMLOOP/i
 const isNum = (s: string) => /^\d+$/.test(s)
 const isAfstand = (s: string) => isNum(s) && Number(s) >= 250 && Number(s) <= 320
+// "x DH" = dead heat: both horses get the mark, so the rit counts for neither
+const isMark = (s: string) => /^x( DH)?$/i.test(s)
+const NIET_GESTART = /^niet\s+(starter|gestart)$/i
 
 interface Placed {
   page: number
@@ -107,7 +114,8 @@ export function parseRitverloop(lines: PdfLine[]): Ritverloop {
       continue
     }
     if (/Naam paard/i.test(text)) {
-      const cols = ['I', 'II', 'III'].map((c) => line.items.find((it) => it.s === c)?.x)
+      // "I II III" or (2023) "1e 2e Kamprit"
+      const cols = [/^(I|1e)$/i, /^(II|2e)$/i, /^(III|3e|Kamprit)$/i].map((c) => line.items.find((it) => c.test(it.s))?.x)
       if (cols.every((c) => c !== undefined)) columns = cols as number[]
       continue
     }
@@ -115,30 +123,37 @@ export function parseRitverloop(lines: PdfLine[]): Ritverloop {
 
     const afstand = line.items.find((it) => isAfstand(it.s))
     if (!afstand) {
-      for (const it of line.items) if (it.s === 'X') looseX.push({ page: line.page, y: line.y, x: it.x })
+      for (const it of line.items) if (isMark(it.s)) looseX.push({ page: line.page, y: line.y, x: it.x })
       continue
     }
-    const left = line.items.filter((it) => it.x < afstand.x)
+    // A marker glued to the position ("S11") is split into the marker and the number
+    const left = line.items
+      .filter((it) => it.x < afstand.x)
+      .flatMap((it) => {
+        const glued = /^([A-Z])(\d+)$/.exec(it.s)
+        return glued ? [{ ...it, s: glued[1]! }, { ...it, x: it.x + 1, s: glued[2]! }] : [it]
+      })
     const right = line.items.filter((it) => it.x > afstand.x)
     const placeLabel = left.find((it) => /^\d+e:?$/i.test(it.s))
+    // Some pdf's have no "UITSLAG:" heading; a place label ("1e:") only appears in the uitslag
+    if (placeLabel) section = 'uitslag'
     const nums = left.filter((it) => isNum(it.s)).map((it) => Number(it.s))
+    const firstNumX = Math.min(...left.filter((it) => isNum(it.s)).map((it) => it.x))
+    const isMarker = (it: PdfItem) => /^[A-Z]$/.test(it.s) && it.x < firstNumX
     const name = cleanName(
       left
-        .filter((it) => !isNum(it.s) && it.s !== 'B' && it !== placeLabel)
+        .filter((it) => !isNum(it.s) && !isMarker(it) && it !== placeLabel)
         .map((it) => it.s)
         .join(' '),
     )
     if (!name) continue
     const euroAt = right.findIndex((it) => it.s.startsWith('€'))
     const riderItems = right.filter(
-      (it, i) => it.s !== 'X' && (euroAt < 0 || i < euroAt) && (columns.length < 3 || it.x < columns[0]! - 4),
+      (it, i) => !isMark(it.s) && (euroAt < 0 || i < euroAt) && (columns.length < 3 || it.x < columns[0]! - 4),
     )
-    const riders = riderItems
-      .map((it) => it.s)
-      .join(' ')
-      .split('/')
-      .map(cleanName)
-      .filter(Boolean)
+    const riderText = cleanName(riderItems.map((it) => it.s).join(' '))
+    const nietGestart = NIET_GESTART.test(riderText)
+    const riders = nietGestart ? [] : riderText.split('/').map(cleanName).filter(Boolean)
 
     if (section === 'uitslag') {
       const euro = euroAt >= 0 ? right.slice(euroAt).map((it) => it.s).join('') : ''
@@ -160,11 +175,12 @@ export function parseRitverloop(lines: PdfLine[]): Ritverloop {
       name,
       afstand: Number(afstand.s),
       riders,
-      bijgeloot: left.some((it) => it.s === 'B'),
+      bijgeloot: left.some((it) => it.s === 'B' && isMarker(it)),
+      nietGestart,
       wins: [],
     }
     for (const it of right) {
-      const rit = it.s === 'X' ? ritOf(it.x) : null
+      const rit = isMark(it.s) ? ritOf(it.x) : null
       if (rit && !row.wins.includes(rit)) row.wins.push(rit)
     }
     section.rows.push(row)
@@ -186,6 +202,18 @@ export function parseRitverloop(lines: PdfLine[]): Ritverloop {
     for (const row of omloop.rows) row.wins.sort()
     omloop.koppels = koppelsOf(omloop.rows)
   }
+  // No winner from the marks (1–1, a missing mark): the one who rode the next omloop won. Not
+  // for the beslissende omloop, where the losers of the last koppels ride too.
+  result.omlopen.forEach((omloop, i) => {
+    const next = result.omlopen[i + 1]
+    if (!next || next.beslissend) return
+    const rode = new Set(next.rows.map((row) => row.startnr))
+    for (const k of omloop.koppels) {
+      if (k.winner !== null || k.b === null) continue
+      const through = [k.a, k.b].filter((s) => rode.has(s))
+      if (through.length === 1) k.winner = through[0]!
+    }
+  })
   return result
 }
 
@@ -208,6 +236,9 @@ function koppelsOf(rows: RitverloopRow[]): RitverloopKoppel[] {
       }
       const aWins = ritten.filter((s) => s === a!.startnr).length
       const bWins = ritten.length - aWins
-      return { nr, a: a!.startnr, b: b.startnr, ritten, winner: aWins === bWins ? null : aWins > bWins ? a!.startnr : b.startnr }
+      // Walkover: nothing was ridden and exactly one of the two did not start
+      const walkover = !ritten.length && a!.nietGestart !== b.nietGestart ? (a!.nietGestart ? b.startnr : a!.startnr) : null
+      const winner = aWins === bWins ? walkover : aWins > bWins ? a!.startnr : b.startnr
+      return { nr, a: a!.startnr, b: b.startnr, ritten, winner }
     })
 }
