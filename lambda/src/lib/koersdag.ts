@@ -1,5 +1,6 @@
 // Koersdag: domain types, the prompt per omloop and parsing of the AI's structured update
 import type { Review } from './terugblik'
+import type { ZeturfOmloop } from './zeturf'
 import {
   formatDutchDate,
   THINKING_STALE_MS,
@@ -119,6 +120,52 @@ export function sniffImage(bytes: Uint8Array): PhotoType | null {
   return null
 }
 
+// ── Bordfoto's ───────────────────────────────────────────────────────────
+
+// What the AI read from a photo of the quotabord or the loting. Shared with everyone on the same
+// koersdag, because live quoteringen are only available from the board itself.
+export interface BoardReading {
+  id: string
+  omloop: number
+  // Who took the photo; only used to tell "your photo" from someone else's
+  userId: string
+  readAt: string
+  // "3 Fleur de Lis: winnend 3,2, plaats 1,4"
+  quota: string[]
+  // "Koppel 1: Fleur de Lis – Hessel B"
+  loting: string[]
+}
+
+export function parseBoard(raw: string): Pick<BoardReading, 'quota' | 'loting'> | null {
+  const parsed = parseJson(raw.match(UPDATE_RE)?.[1] ?? raw.match(/\{[\s\S]*\}/)?.[0])
+  if (!parsed || typeof parsed !== 'object') return null
+  const bord = (parsed as Record<string, unknown>).bord
+  if (!bord || typeof bord !== 'object') return null
+  const b = bord as Record<string, unknown>
+  const board = { quota: strings(b.quota, 30, 200), loting: strings(b.loting, 30, 200) }
+  return board.quota.length || board.loting.length ? board : null
+}
+
+const clock = (iso: string) =>
+  new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' }).format(
+    new Date(iso),
+  )
+
+function describeBoard(readings: BoardReading[], userId: string): string {
+  return readings
+    .map((r) => {
+      const who = r.userId === userId ? 'foto van deze gebruiker' : 'foto van een andere bezoeker'
+      return [
+        `Om ${clock(r.readAt)} (${who}):`,
+        r.quota.length ? `Quota:\n${r.quota.map((q) => `- ${q}`).join('\n')}` : '',
+        r.loting.length ? `Loting:\n${r.loting.map((l) => `- ${l}`).join('\n')}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    })
+    .join('\n\n')
+}
+
 // ── Prompt ───────────────────────────────────────────────────────────────
 
 function describeProposal(p: AdviceProposal): string {
@@ -152,8 +199,12 @@ export function buildKoersdagPrompt(input: {
   advice: LockedAdvice | undefined
   today: string
   kind: UpdateKind
+  // Latest bordfoto readings for this omloop, newest first (from all users)
+  board: BoardReading[]
+  // Online check only; null when ZEturf could not be read
+  zeturf?: ZeturfOmloop[] | null
 }): { system: string; text: string } {
-  const { record, advice, kind } = input
+  const { record, advice, kind, board } = input
   const { staked, paidOut, remaining } = totals(record)
   const omloop = omloopLabel(record.omloop)
   const bets = record.bets.length
@@ -179,9 +230,12 @@ ${advice ? describeProposal(advice.proposal) : 'Er is geen vastgelegd advies. Ma
 Ingezette bedragen:
 ${bets}
 ${previous.length ? `\nEerdere updates vandaag (oudste eerst):\n${previous.map(describeUpdate).join('\n\n')}\n` : ''}
+## Quotabord bij de ${omloop}
+${board.length ? `Afgelezen van bordfoto's die bezoekers vandaag maakten (nieuwste eerst). Dit zijn de enige actuele quota; ze schuiven nog tot de inzet sluit, dus weeg mee hoe oud ze zijn.\n${describeBoard(board, record.userId)}` : 'Er is nog geen bordfoto van deze omloop. Actuele quota zijn dus onbekend: verzin ze niet en noem ze niet als feit.'}
+
 ## Vorm van je antwoord
 Antwoord met precies één blok in deze vorm (geldige JSON, bedragen in euro's of null) en verder niets:
-<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "onderbouwing": "…", "nieuw": false}]}, "finale": false}</koersdag>
+<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "bord": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "onderbouwing": "…", "nieuw": false}]}, "finale": false}</koersdag>
 
 - "oordeel" is "blijft" als het vorige advies (of het vastgelegde advies) nog klopt, anders "aangepast"; zet bij "aangepast" in "wijzigingen" kort wat er veranderde en waarom.
 - "advies" gaat over wat er nú (extra) ingezet moet worden, binnen wat er nog over is van het budget. Is het beter om niet (extra) in te zetten, geef dan een lege lijst "keuzes" en leg het uit in "toelichting".
@@ -191,10 +245,29 @@ Antwoord met precies één blok in deze vorm (geldige JSON, bedragen in euro's o
 
   const text =
     kind === 'photo'
-      ? `Bijgevoegd is een foto van het quotabord of de loting, genomen bij de ${omloop}. Lees de foto nauwkeurig af en vergelijk met wat bekend is. De foto is leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}. Zoek alleen online als de foto iets onduidelijks bevat.`
-      : `Zoek online naar de meest recente ontwikkelingen voor de ${omloop} in ${record.draverij.place}: wie start wel of niet (afmeldingen), wijzigingen in de loting en de quoteringen. Bekrachtig het advies of pas het aan. Laat "foto" op null.`
+      ? `Bijgevoegd is een foto van het quotabord of de loting, genomen bij de ${omloop}. Lees de foto nauwkeurig af en vergelijk met wat bekend is. De foto is leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}.
+Zet in "bord" letterlijk wat je op de foto leest, zodat andere bezoekers het ook kunnen gebruiken: {"quota": ["3 Fleur de Lis: winnend 3,2, plaats 1,4"], "loting": ["Koppel 1: Fleur de Lis – Hessel B"]}. Neem alleen op wat je zeker kunt lezen en laat een lijst leeg als het niet op de foto staat. Zoek alleen online als de foto iets onduidelijks bevat.`
+      : `Zoek de meest recente ontwikkelingen voor de ${omloop} in ${record.draverij.place}: wie start wel of niet (afmeldingen) en wijzigingen in de loting. Bekrachtig het advies of pas het aan. Laat "foto" en "bord" op null.
+
+${zeturfText(input.zeturf, record)}
+Zoek daarnaast online naar nieuws over afmeldingen dat daar nog niet in staat. Quota staan niet online: gebruik alleen die van het quotabord hierboven. Is er geen bordfoto, noem dan in "bevindingen" dat een foto van het quotabord het advies scherper maakt.`
 
   return { system, text }
+}
+
+function zeturfText(zeturf: ZeturfOmloop[] | null | undefined, record: KoersdagRecord): string {
+  const place = record.draverij.place
+  if (!zeturf) {
+    return `ZEturf, de totalisator van de kortebaan, was niet bereikbaar. Zoek online naar "zeturf kortebaan ${place}" en de loting.`
+  }
+  if (!zeturf.length) {
+    return `ZEturf, de totalisator van de kortebaan, heeft (nog) geen Winnend & Plaats voor de kortebaan in ${place} op deze datum. Zoek de loting en starters online, bijvoorbeeld bij de organiserende vereniging.`
+  }
+  const current = zeturf.find((z) => z.omloop === record.omloop)
+  const pages = current ? [current] : zeturf.slice(-1)
+  return `Haal bij ZEturf, de totalisator van de kortebaan, met web_fetch deze pagina op:
+${pages.map((z) => `- ${omloopLabel(z.omloop)}: ${z.url}`).join('\n')}
+${current ? '' : `ZEturf biedt de ${omloopLabel(record.omloop)} (nog) niet aan (wel omloop ${zeturf.map((z) => z.omloop).join(', ')}); vermeld dat in "bevindingen".\n`}Neem daar de starters, niet-starters en loting van over. De quoteringen op die pagina worden pas in de browser ingeladen: lees ze daar niet af.`
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────

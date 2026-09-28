@@ -6,16 +6,24 @@ import { askClaude, ClaudeError, type ChatImage } from './lib/claude'
 import { aliasOf, type Alias } from './lib/http'
 import {
   buildKoersdagPrompt,
+  parseBoard,
   parseUpdate,
   UNREADABLE_ERROR,
   type KoersdagRecord,
   type KoersdagUpdate,
 } from './lib/koersdag'
-import { getKoersdag, KoersdagChangedError, putKoersdag } from './lib/koersdagStore'
+import {
+  getKoersdag,
+  KoersdagChangedError,
+  listBoardReadings,
+  putBoardReading,
+  putKoersdag,
+} from './lib/koersdagStore'
 import { deletePhoto, readPhoto } from './lib/photos'
 import { readClaudeToken } from './lib/secrets'
 import { dayOf, getAiConfig, putAiConfig } from './lib/store'
 import type { WorkerJob } from './lib/worker'
+import { zeturfOmlopen } from './lib/zeturf'
 
 // Leave room within the Lambda timeout (5 min) to save the result
 const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000
@@ -57,9 +65,15 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
   const token = await readClaudeToken(alias)
   if (!token) return { error: 'De AI is nog niet gekoppeld. Vraag de eigenaar om de AI-koppeling in te stellen.' }
 
-  const [instruction, advice] = await Promise.all([
+  const [instruction, advice, board, zeturf] = await Promise.all([
     getInstruction(alias),
     getAdvice(alias, record.userId, record.draverij.id),
+    // A missing board only makes the advice less sharp; don't fail the update over it
+    listBoardReadings(alias, record.draverij.id, record.omloop).catch((err) => {
+      console.error(err)
+      return []
+    }),
+    kind === 'fetch' ? zeturfOmlopen(record.draverij) : Promise.resolve(null),
   ])
   const images: ChatImage[] = []
   if (kind === 'photo') {
@@ -73,8 +87,15 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
     advice,
     today: dayOf(),
     kind,
+    board,
+    zeturf,
   })
-  const reply = await askClaude(token, { system, turns: [{ role: 'user', text, images }], timeoutMs: CLAUDE_TIMEOUT_MS })
+  const reply = await askClaude(token, {
+    system,
+    turns: [{ role: 'user', text, images }],
+    timeoutMs: CLAUDE_TIMEOUT_MS,
+    webFetch: kind === 'fetch',
+  })
 
   const update = parseUpdate(reply.text, {
     id: `u-${randomUUID()}`,
@@ -88,6 +109,18 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
   if (!update) {
     console.error('Unparseable koersdag reply', reply.text.slice(0, 1000))
     return { error: UNREADABLE_ERROR }
+  }
+
+  // Share what was read from the board with everyone on this koersdag
+  const reading = kind === 'photo' ? parseBoard(reply.text) : null
+  if (reading) {
+    await putBoardReading(alias, record.draverij.id, {
+      id: randomUUID(),
+      omloop: record.omloop,
+      userId: record.userId,
+      readAt: new Date().toISOString(),
+      ...reading,
+    }).catch(console.error)
   }
   return { update }
 }
