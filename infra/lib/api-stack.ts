@@ -305,6 +305,24 @@ export class ApiStack extends cdk.Stack {
       environment: { TABLE_DEV: tables.dev.tableName, TABLE_PROD: tables.prod.tableName },
     })
     for (const env of envs) tables[env].grantReadData(kbMcpFn)
+    // Not behind API Gateway (see mcpUrlOf in lambda/src/lib/oauth.ts): a Function URL per alias
+    const kbMcpUrls = Object.fromEntries(
+      envs.map((env) => [
+        env,
+        kbMcpFn.addAlias(env).addFunctionUrl({
+          authType: lambda.FunctionUrlAuthType.NONE, // OAuth bearer tokens, checked in the handler
+          cors: {
+            allowedOrigins: ['*'],
+            allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.POST],
+            allowedHeaders: ['authorization', 'content-type', 'mcp-protocol-version'],
+            exposedHeaders: ['www-authenticate'],
+          },
+        }),
+      ]),
+    ) as Record<(typeof envs)[number], lambda.FunctionUrl>
+    const mcpUrl = (env: (typeof envs)[number]) => cdk.Fn.join('', [kbMcpUrls[env].url, 'mcp'])
+    oauthFn.addEnvironment('KB_MCP_URL_DEV', mcpUrl('dev'))
+    oauthFn.addEnvironment('KB_MCP_URL_PROD', mcpUrl('prod'))
 
     const kbWriters = [kbIngestFn, analysisWorkerFn, koersdagWorkerFn, terugblikWorkerFn, terugblikFn, kbMcpFn]
     const kbReaders = [kbMcpFn]
@@ -313,7 +331,7 @@ export class ApiStack extends cdk.Stack {
       fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['dsql:DbConnect'], resources: [kbCluster.attrResourceArn] }))
     }
 
-    const functions = [healthFn, ...accountFunctions, kbMcpFn]
+    const functions = [healthFn, ...accountFunctions]
 
     // ── Lambda aliases ───────────────────────────────────────────────────────
     // Every function gets a `dev` and `prod` alias; the handler reads its alias from
@@ -401,9 +419,6 @@ export class ApiStack extends cdk.Stack {
       ['GET', '/oauth/authorize', oauthFn],
       ['POST', '/oauth/authorize', oauthFn],
       ['POST', '/oauth/token', oauthFn],
-      ['POST', '/mcp', kbMcpFn],
-      ['GET', '/mcp', kbMcpFn],
-      ['DELETE', '/mcp', kbMcpFn],
     ]
     const methods = routes.map(([method, route, fn]) =>
       api.root.resourceForPath(route).addMethod(method, aliasIntegration(fn)),
@@ -440,6 +455,15 @@ export class ApiStack extends cdk.Stack {
       description: 'Prod stage — used by kortebaan.nl (production branch)',
     })
 
+    // The MCP server finds its authorization server by stage URL (built from the API id, not
+    // the Stage, to avoid a dependency cycle)
+    for (const env of envs) {
+      kbMcpFn.addEnvironment(
+        `OAUTH_ISSUER_${env.toUpperCase()}`,
+        `https://${api.restApiId}.execute-api.${this.region}.${this.urlSuffix}/${env}`,
+      )
+    }
+
     // ── Outputs ──────────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'ApiUrlDev', {
       value: devStage.urlForPath('/'),
@@ -458,8 +482,9 @@ export class ApiStack extends cdk.Stack {
       value: cdk.Fn.join(',', kbReaders.map((fn) => fn.role!.roleArn)),
       description: '--reader-arn for kb-migrate (kb_sql of the MCP server)',
     })
+    new cdk.CfnOutput(this, 'McpUrlDev', { value: mcpUrl('dev'), description: 'Kennisbank MCP server, dev (test via staging)' })
     new cdk.CfnOutput(this, 'McpUrlProd', {
-      value: prodStage.urlForPath('/mcp'),
+      value: mcpUrl('prod'),
       description: 'Kennisbank MCP server (Claude Code .mcp.json / claude.ai connector)',
     })
   }
