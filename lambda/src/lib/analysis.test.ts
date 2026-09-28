@@ -119,4 +119,20 @@ describe('claude helpers', () => {
       { url: 'https://b.nl/x', title: 'b.nl' },
     ])
   })
+
+  it('lists fetched pages before search results when nothing was cited', () => {
+    expect(
+      sourcesOf([
+        { type: 'web_search_tool_result', content: [{ url: 'https://b.nl', title: 'B' }] },
+        {
+          type: 'web_fetch_tool_result',
+          content: { type: 'web_fetch_result', url: 'https://www.zeturf.nl/r', content: { title: 'ZEturf' } },
+        },
+        { type: 'web_fetch_tool_result', content: { type: 'web_fetch_tool_error', error_code: 'url_not_accessible' } },
+      ]),
+    ).toEqual([
+      { url: 'https://www.zeturf.nl/r', title: 'ZEturf' },
+      { url: 'https://b.nl', title: 'B' },
+    ])
+  })
 })
