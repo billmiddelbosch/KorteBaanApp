@@ -225,6 +225,24 @@ export const MIGRATIONS: Migration[] = [
       `create index async if not exists prediction_draverij on kb.prediction (draverij_id)`,
     ],
   },
+  {
+    id: '002-fase2',
+    statements: [
+      // Predictions are matched to the (official) koppel by omloop and horse, not by koppel id
+      `alter table kb.prediction add column if not exists omloop int`,
+      `alter table kb.prediction add column if not exists opponent_id uuid`,
+      // Voorlopige koppels from Koersdag: when they were read, so the dossier can show the age
+      `alter table kb.koppel add column if not exists created_at timestamptz`,
+      // Small derived values, e.g. the latest rating backtest
+      `create table if not exists kb.meta (
+        key text primary key,
+        value jsonb not null,
+        updated_at timestamptz not null default now()
+      )`,
+      `create index async if not exists lesson_status on kb.lesson (status)`,
+      `create index async if not exists claim_status on kb.claim (status)`,
+    ],
+  },
 ]
 
 export const ROLES = ['kb_writer', 'kb_reader'] as const

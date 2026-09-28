@@ -2,12 +2,16 @@ import { draverijOf } from './lib/analysis'
 import { KALENDER_URL, parseKalender } from './lib/kalender'
 import { kbClient } from './lib/kb/db'
 import { loadEvent } from './lib/kb/ingest'
+import { recomputeRatings } from './lib/kb/ratings'
 import { knownState, Resolver, writeRecord, writeWeather } from './lib/kb/store'
 import { fetchWeather } from './lib/kb/weather'
+import { scorePredictions } from './lib/kb/write'
 
 // Scheduled (EventBridge, daily) and manually invokable: adds the results of recent draverijen
 // to the kennisbank. There is one kennisbank for dev and prod, so this runs once, not per alias.
-// Manual: invoke with {"event": "/events/53/tzand-2025"} to (re)load one draverij.
+// Manual: invoke with {"event": "/events/53/tzand-2025"} to (re)load one draverij, or with
+// {"ratings": true} to only recompute the ratings. After new results it scores the AI's win
+// chances for those draverijen and recomputes all ratings.
 const LOOKBACK_DAYS = 21
 
 // Calendar day in Amsterdam (own copy: lib/store pulls in the DynamoDB client)
@@ -16,6 +20,7 @@ const dayOf = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: '
 interface IngestEvent {
   event?: string
   place?: string
+  ratings?: boolean
 }
 
 export async function handler(input: IngestEvent = {}) {
@@ -23,6 +28,7 @@ export async function handler(input: IngestEvent = {}) {
   if (!host) throw new Error('KB_HOST ontbreekt')
   const client = await kbClient({ host, role: 'kb_writer' })
   const today = dayOf()
+  if (input.ratings && !input.event) return { today, ratings: await ratings(client) }
 
   let targets: { path: string; place?: string; id?: string }[]
   if (input.event) {
@@ -50,6 +56,7 @@ export async function handler(input: IngestEvent = {}) {
 
   const resolver = await Resolver.load(client)
   const results: Record<string, string> = {}
+  const changed: string[] = []
   for (const target of targets) {
     try {
       const loaded = await loadEvent(target.path, target.place)
@@ -60,6 +67,7 @@ export async function handler(input: IngestEvent = {}) {
         continue
       }
       const written = await writeRecord(client, resolver, record)
+      if (written !== 'skipped') changed.push(record.id)
       let weather = ''
       if (record.baan.lat !== null && record.baan.lon !== null) {
         const w = await fetchWeather(record.baan.lat, record.baan.lon, record.date, today).catch((err: Error) => {
@@ -78,7 +86,24 @@ export async function handler(input: IngestEvent = {}) {
     }
   }
 
-  const summary = { today, targets: targets.length, results }
+  let scored = 0
+  for (const id of changed) {
+    scored += await scorePredictions(client, id).catch((err: Error) => {
+      console.error('kb-ingest scoren', id, err)
+      return 0
+    })
+  }
+  const summary = { today, targets: targets.length, results, scored, ratings: changed.length ? await ratings(client) : 'ongewijzigd' }
   console.log('kb-ingest', JSON.stringify(summary))
   return summary
+}
+
+async function ratings(client: Awaited<ReturnType<typeof kbClient>>): Promise<string> {
+  try {
+    const { rows, backtest } = await recomputeRatings(client)
+    return `${rows} ratings; backtest ${backtest.matches} koppels, Brier ${backtest.brier}`
+  } catch (err) {
+    console.error('kb-ingest ratings', err)
+    return `fout: ${(err as Error).message}`
+  }
 }

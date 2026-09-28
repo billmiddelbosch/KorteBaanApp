@@ -4,6 +4,7 @@ import { findOmlopen } from './zeturf'
 import {
   buildKoersdagPrompt,
   parseBoard,
+  parseKansen,
   parseUpdate,
   sniffImage,
   totals,
@@ -163,7 +164,7 @@ describe('koersdag prompt', () => {
     quota,
     loting: [],
   })
-  const prompt = (kind: 'fetch' | 'photo', extra: { board?: BoardReading[]; zeturf?: typeof omloop2[] | null } = {}) =>
+  const prompt = (kind: 'fetch' | 'photo', extra: { board?: BoardReading[]; zeturf?: typeof omloop2[] | null; kennisbank?: string | null } = {}) =>
     buildKoersdagPrompt({ instruction: 'x', record, advice: undefined, today: '2026-09-23', kind, board: [], ...extra })
 
   it('points an online check at the ZEturf page of this omloop, without its quota', () => {
@@ -186,6 +187,14 @@ describe('koersdag prompt', () => {
     expect(shared).toContain('- 3 Fleur de Lis: winnend 3,2')
     expect(shared).toContain('(foto van deze gebruiker)')
     expect(prompt('fetch').system).toContain('verzin ze niet')
+  })
+
+  it('puts the kennisbank before the quotabord and asks for win chances per koppel', () => {
+    const { system } = prompt('fetch', { kennisbank: '## Kennisbank (stand 2026-09-22)' })
+    expect(system).toContain('## Kennisbank (stand 2026-09-22)')
+    expect(system.indexOf('## Kennisbank')).toBeLessThan(system.indexOf('## Quotabord'))
+    expect(system).toContain('"winkans_links"')
+    expect(prompt('fetch').system).not.toContain('## Kennisbank')
   })
 
   it('asks a photo check to transcribe the board and leaves ZEturf out', () => {
@@ -221,5 +230,30 @@ describe('toApiMessages with a photo', () => {
         ],
       },
     ])
+  })
+})
+
+describe('parseKansen', () => {
+  const reply = (kansen: unknown) => '<koersdag>' + JSON.stringify({ advies: { keuzes: [] }, kansen }) + '</koersdag>'
+
+  it('reads valid win chances and numbers koppels without a number by position', () => {
+    const kansen = parseKansen(
+      reply([
+        { koppel: 1, links: 'Fleur', rechts: 'Hessel', winkans_links: 0.6, quota_links: 2.4, quota_rechts: 0.5 },
+        { links: 'Anna', rechts: 'Bert', winkans_links: 0.45 },
+        { koppel: 3, links: 'Cor', rechts: 'Dirk', winkans_links: 1.4 },
+        { koppel: 4, links: '', rechts: 'Eva', winkans_links: 0.5 },
+      ]),
+      2,
+    )
+    expect(kansen).toEqual([
+      { omloop: 2, koppel: 1, links: 'Fleur', rechts: 'Hessel', winkansLinks: 0.6, quotaLinks: 2.4, quotaRechts: null },
+      { omloop: 2, koppel: 2, links: 'Anna', rechts: 'Bert', winkansLinks: 0.45, quotaLinks: null, quotaRechts: null },
+    ])
+  })
+
+  it('returns nothing without kansen', () => {
+    expect(parseKansen(reply(undefined), 1)).toEqual([])
+    expect(parseKansen('geen blok', 1)).toEqual([])
   })
 })

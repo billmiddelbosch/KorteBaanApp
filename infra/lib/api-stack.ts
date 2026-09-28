@@ -283,14 +283,21 @@ export class ApiStack extends cdk.Stack {
       'kbIngest',
       'kbIngest.handler',
       'Kennisbank: results of recent draverijen from kortebaanbond.nl',
-      { memorySize: 1024, timeout: cdk.Duration.minutes(5), environment: { KB_HOST: kbHost } },
+      { memorySize: 1024, timeout: cdk.Duration.minutes(5) },
     )
-    kbIngestFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['dsql:DbConnect'], resources: [kbCluster.attrResourceArn] }))
     new events.Rule(this, 'KbIngest', {
       description: 'Daily kennisbank ingest of recent draverijen',
       schedule: events.Schedule.cron({ minute: '0', hour: '5' }),
       targets: [new targets.LambdaFunction(kbIngestFn, { retryAttempts: 1 })],
     })
+
+    // Besides the ingest, the AI workers read the kennisbank and write claims, win chances and
+    // lessons, and the Terugblik API lists and removes lessons; all as kb_writer
+    const kbWriters = [kbIngestFn, analysisWorkerFn, koersdagWorkerFn, terugblikWorkerFn, terugblikFn]
+    for (const fn of kbWriters) {
+      fn.addEnvironment('KB_HOST', kbHost)
+      fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['dsql:DbConnect'], resources: [kbCluster.attrResourceArn] }))
+    }
 
     const functions = [healthFn, ...accountFunctions]
 
@@ -419,9 +426,9 @@ export class ApiStack extends cdk.Stack {
       description: 'VITE_API_BASE_URL for the Amplify production branch',
     })
     new cdk.CfnOutput(this, 'KbEndpoint', { value: kbHost, description: 'Kennisbank DSQL endpoint (--host for kb-migrate/kb-backfill)' })
-    new cdk.CfnOutput(this, 'KbIngestRoleArn', {
-      value: kbIngestFn.role!.roleArn,
-      description: '--writer-arn for kb-migrate',
+    new cdk.CfnOutput(this, 'KbWriterRoleArns', {
+      value: cdk.Fn.join(',', kbWriters.map((fn) => fn.role!.roleArn)),
+      description: '--writer-arn for kb-migrate (all functions that use the kennisbank)',
     })
   }
 }

@@ -12,7 +12,6 @@ import type {
   Draverij,
   InstructionRecord,
   KnowledgeFact,
-  Lesson,
   LockedAdvice,
   Source,
 } from './analysis'
@@ -181,14 +180,6 @@ export async function putInstruction(alias: Alias, record: InstructionRecord): P
 
 // ── Kennisbank ───────────────────────────────────────────────────────────
 
-export async function listFacts(alias: Alias, limit: number): Promise<KnowledgeFact[]> {
-  return query<KnowledgeFact>(alias, 'KB', 'FACT#', { newestFirst: true, limit })
-}
-
-export async function listLessons(alias: Alias, limit: number): Promise<Lesson[]> {
-  return query<Lesson>(alias, 'KB', 'LESSON#', { newestFirst: true, limit })
-}
-
 export async function saveKnowledge(
   alias: Alias,
   facts: KnowledgeFact[],
@@ -206,27 +197,4 @@ export async function saveKnowledge(
       }),
     )
   }
-}
-
-// Lessons from Terugblik; the AI reads the newest ones via listLessons
-export async function saveLessons(alias: Alias, lessons: Lesson[]): Promise<void> {
-  const TableName = tableName(alias)
-  const items = lessons.map((l) => ({ pk: 'KB', sk: `LESSON#${l.createdAt}#${l.id}`, ...l }))
-  for (let i = 0; i < items.length; i += 25) {
-    await doc.send(
-      new BatchWriteCommand({
-        RequestItems: { [TableName]: items.slice(i, i + 25).map((Item) => ({ PutRequest: { Item } })) },
-      }),
-    )
-  }
-}
-
-// Returns false when the lesson doesn't exist (anymore)
-export async function deleteLesson(alias: Alias, id: string): Promise<boolean> {
-  const lesson = (await query<Lesson>(alias, 'KB', 'LESSON#')).find((l) => l.id === id)
-  if (!lesson) return false
-  await doc.send(
-    new DeleteCommand({ TableName: tableName(alias), Key: { pk: 'KB', sk: `LESSON#${lesson.createdAt}#${lesson.id}` } }),
-  )
-  return true
 }

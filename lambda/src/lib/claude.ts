@@ -198,44 +198,116 @@ async function errorFor(res: Response): Promise<ClaudeError> {
   return new ClaudeError('other', `Claude gaf een onverwachte fout (${res.status}). Probeer het opnieuw.`)
 }
 
-// One chat turn with web search (and web fetch when asked). Non-streaming; long searches may
-// pause the turn, which we continue.
-export async function askClaude(
-  token: string,
-  input: { system: string; turns: ChatTurn[]; timeoutMs: number; webFetch?: boolean },
-): Promise<ChatReply> {
+// A tool of our own (e.g. the kennisbank) that Claude may call; runTool answers it
+export interface CustomTool {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+}
+
+export type ToolRunner = (name: string, input: unknown) => Promise<string>
+
+export const TOOL_BUDGET_SPENT = 'Toolbudget op; geef nu je antwoord.'
+
+export interface AskInput {
+  system: string
+  turns: ChatTurn[]
+  timeoutMs: number
+  webFetch?: boolean
+  // Own tools and how often Claude may call them (rounds of tool calls) before it must answer
+  tools?: CustomTool[]
+  runTool?: ToolRunner
+  maxToolRounds?: number
+  // Web searches over the whole turn (default: 5 per request)
+  searchBudget?: number
+}
+
+const isWebTool = (t: unknown) => (t as { type?: string }).type?.startsWith('web_') ?? false
+
+async function toolResults(blocks: ContentBlock[], runTool: ToolRunner | undefined, spent: boolean): Promise<ContentBlock[]> {
+  const results: ContentBlock[] = []
+  for (const block of blocks) {
+    if (block.type !== 'tool_use') continue
+    const { id, name, input } = block as ContentBlock & { id: string; name: string; input: unknown }
+    let content: string
+    let isError = false
+    if (spent || !runTool) {
+      content = TOOL_BUDGET_SPENT
+      isError = true
+    } else {
+      try {
+        content = await runTool(name, input)
+      } catch (err) {
+        console.error('Tool failed', name, err)
+        content = `Tool ${name} faalde: ${(err as Error).message}`
+        isError = true
+      }
+    }
+    results.push({ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) } as ContentBlock)
+  }
+  return results
+}
+
+// One chat turn with web search (and web fetch when asked), optionally with own tools.
+// Non-streaming; long searches may pause the turn, which we continue. With own tools the
+// answer is the text after the last tool round (earlier text is Claude thinking aloud).
+export async function askClaude(token: string, input: AskInput): Promise<ChatReply> {
   const signal = AbortSignal.timeout(input.timeoutMs)
   const system = [
     { type: 'text', text: OAUTH_SYSTEM_PREFIX },
     { type: 'text', text: input.system },
   ]
   const messages = toApiMessages(input.turns)
-  let tools: unknown[] | undefined = input.webFetch ? [WEB_SEARCH_TOOL, WEB_FETCH_TOOL] : [WEB_SEARCH_TOOL]
+  const custom = input.tools ?? []
+  const maxToolRounds = custom.length ? (input.maxToolRounds ?? 3) : 0
+  const searchBudget = input.searchBudget ?? WEB_SEARCH_TOOL.max_uses
+  let webTools: unknown[] = input.webFetch ? [WEB_SEARCH_TOOL, WEB_FETCH_TOOL] : [WEB_SEARCH_TOOL]
   const content: ContentBlock[] = []
+  let textFrom = 0
+  let toolRounds = 0
+  let searches = 0
 
-  for (let round = 0; round <= MAX_CONTINUATIONS; round++) {
-    const body = { model: CHAT_MODEL, max_tokens: MAX_TOKENS, system, messages, ...(tools ? { tools } : {}) }
+  // Pause continuations plus tool rounds, plus the round in which Claude hears the budget is spent
+  const maxRequests = MAX_CONTINUATIONS + 1 + (maxToolRounds ? maxToolRounds + 1 : 0)
+  for (let request = 0; request < maxRequests; request++) {
+    const web = webTools.map((t) =>
+      t === WEB_SEARCH_TOOL ? { ...WEB_SEARCH_TOOL, max_uses: Math.max(1, Math.min(WEB_SEARCH_TOOL.max_uses, searchBudget - searches)) } : t,
+    )
+    const tools = [...web, ...custom]
+    const body = { model: CHAT_MODEL, max_tokens: MAX_TOKENS, system, messages, ...(tools.length ? { tools } : {}) }
     let res = await post(token, body, signal)
-    // If a web tool isn't available for this token, drop web fetch first, then all tools:
+    // If a web tool isn't available for this token, drop web fetch first, then all web tools:
     // answering with less is better than not answering
-    while (res.status === 400 && tools) {
+    while (res.status === 400 && webTools.length) {
       const detail = await res.clone().text().catch(() => '')
-      if (!/web_search|web_fetch|tool/i.test(detail)) break
-      const withoutFetch: unknown[] = tools.filter((t) => t !== WEB_FETCH_TOOL)
-      tools = /web_fetch/i.test(detail) && withoutFetch.length < tools.length ? withoutFetch : undefined
-      console.warn(tools ? 'Web fetch rejected, retrying with web search only' : 'Web search rejected, retrying without tools')
+      if (!/web_search|web_fetch/i.test(detail)) break
+      const withoutFetch = webTools.filter((t) => t !== WEB_FETCH_TOOL)
+      webTools = /web_fetch/i.test(detail) && withoutFetch.length < webTools.length ? withoutFetch : []
+      console.warn(webTools.length ? 'Web fetch rejected, retrying with web search only' : 'Web search rejected, retrying without web tools')
+      const retryTools = [...webTools.map((t) => (t === WEB_SEARCH_TOOL ? web[0] : t)), ...custom]
       const { tools: _t, ...rest } = body
-      res = await post(token, tools ? { ...rest, tools } : rest, signal)
+      res = await post(token, retryTools.length ? { ...rest, tools: retryTools } : rest, signal)
     }
     if (!res.ok) throw await errorFor(res)
 
     const data = (await res.json()) as MessagesResponse
     content.push(...data.content)
-    if (data.stop_reason !== 'pause_turn') break
+    searches += data.content.filter((b) => b.type === 'server_tool_use' && (b as { name?: string }).name === 'web_search').length
+    if (data.stop_reason === 'pause_turn') {
+      messages.push({ role: 'assistant', content: data.content })
+      continue
+    }
+    if (data.stop_reason !== 'tool_use' || !maxToolRounds) break
+
+    const spent = toolRounds >= maxToolRounds
+    toolRounds++
     messages.push({ role: 'assistant', content: data.content })
+    messages.push({ role: 'user', content: await toolResults(data.content, input.runTool, spent) })
+    textFrom = content.length
   }
 
   const text = content
+    .slice(textFrom)
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text)
     .join('')

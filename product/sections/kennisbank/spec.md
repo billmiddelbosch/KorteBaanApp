@@ -131,12 +131,20 @@ Resources: `kb://schema` (tabellen en betekenis), `kb://reglement`, `kb://entity
    - `kbIngest` draait dagelijks om 05:00 UTC over de draverijen van de laatste 21 dagen (of handmatig met `{"event": "/events/…"}`). Het is één functie voor dev en prod.
    - `npm run kb-backfill` doet de eenmalige backfill. Met `--dry-run` wordt alleen opgehaald en geparsed.
    - Uitgesteld: ZEturf- en verenigingssite-parsers.
-2. **Dossier + tools in de workers + ratings**
-   - Custom tools in `askClaude`; het dossier in Analysechat en Koersdag; het `<feiten>`-blok eruit.
-   - Loting en uitslagbord worden live voorlopige data, met de startzijde uit de lotingfoto.
-   - Voorspellingen vastleggen en scoren in Terugblik.
-   - Voorverkenning vóór een draverij en de wekelijkse vorm-scraper in het seizoen.
-   - Glicko-2 met backtest.
+2. **Dossier + tools in de workers + ratings** — ✅ kern gebouwd, nog niet gedeployd.
+   - Custom tools in `askClaude` (`runTool`, `maxToolRounds`, `searchBudget`). Het dossier staat in Analysechat en Koersdag, vóór het advies. Het `<feiten>`-blok is weg: feiten gaan via `kb_record_claim`.
+   - Koersdag legt de winkansen per koppel vast (`kb.prediction`, AI, rating en tote).
+   - Terugblik scoort die kansen tegen de uitslag. De scorecard (Brier-scores en missers) en de te toetsen lessen gaan mee in de evaluatie. Lessen zijn gestructureerd (`tekst`, `paarden`, `pikeurs`, `baan`) en worden bevestigd of weerlegd via `lescontrole`.
+   - Lessen staan in de kennisbank (`kb.lesson`) in plaats van DynamoDB; `kb-migrate --lessons-table` zet de oude over.
+   - Glicko-2 met backtest in `kb.meta` (`rating_backtest`). Ratings komen pas in het dossier bij ≥ 100 koppels en een Brier-score < 0,24.
+   - `kbIngest` scoort voorspellingen van gewijzigde draverijen en herberekent de ratings. `{"ratings": true}` herberekent alleen.
+   - KB_HOST en `dsql:DbConnect` gelden voor alle kennisbank-schrijvers (output `KbWriterRoleArns`).
+   - Uitgesteld:
+     - loting en uitslagbord als live voorlopige data, met de startzijde uit de lotingfoto
+     - voorverkenning vóór een draverij
+     - de wekelijkse vorm-scraper in het seizoen
+     - ratings per ondergrond
+     - vermoeidheid (minuten sinds de vorige rit)
 3. **MCP + OAuth (prod)** — `kbMcp`, `oauth`, `/oauth/authorize`, `.mcp.json` in deze repo, claude.ai-connector
 4. **Curatie-UI** — tabblad "Kennisbank" voor de eigenaar
 

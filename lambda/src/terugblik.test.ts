@@ -1,6 +1,5 @@
 import type { APIGatewayProxyEvent, Context } from 'aws-lambda'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Lesson } from './lib/analysis'
 import { signToken } from './lib/crypto'
 import type { KoersdagRecord } from './lib/koersdag'
 import type { AiConfig, SessionRecord, UserRecord } from './lib/store'
@@ -13,7 +12,7 @@ const db = vi.hoisted(() => ({
   koersdagen: new Map<string, KoersdagRecord>(),
   photos: new Map<string, { bytes: Uint8Array; contentType: string }>(),
   sessions: new Map<string, SessionRecord & { userId: string }>(),
-  lessons: [] as Lesson[],
+  lessons: [] as { id: string; tekst: string; baan?: string; draverijId: string; createdAt: string }[],
   jobs: [] as { userId: string; draverijId: string; thinkingSince: string }[],
 }))
 
@@ -64,9 +63,18 @@ vi.mock('./lib/store', async (importOriginal) => {
 vi.mock('./lib/analysisStore', async () => ({
   getAdvice: async () => undefined,
   getInstruction: async () => undefined,
-  listLessons: async () => [...db.lessons].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-  saveLessons: async (_a: string, lessons: Lesson[]) => void db.lessons.push(...lessons),
-  deleteLesson: async (_a: string, id: string) => {
+}))
+
+vi.mock('./lib/kb/service', async () => ({
+  kbConfigured: () => true,
+  evaluationContext: async () => ({ scorecard: null, lessonsToCheck: [] }),
+  checkLessons: async () => undefined,
+  saveLessons: async (_a: string, lessons: { tekst: string; baan?: string }[], draverijId: string) =>
+    void db.lessons.push(
+      ...lessons.map((l, i) => ({ ...l, id: `l-${db.lessons.length + i}`, draverijId, createdAt: '2026-08-15T19:00:00.000Z' })),
+    ),
+  listLessons: async () => [...db.lessons],
+  removeLesson: async (_a: string, id: string) => {
     const index = db.lessons.findIndex((l) => l.id === id)
     if (index < 0) return false
     db.lessons.splice(index, 1)
@@ -245,7 +253,7 @@ describe('uitslagen and evaluation', () => {
     // Lessons are for the kennisbank, not in the player's view
     expect(JSON.stringify(evaluated.body)).not.toContain('zware baan')
     expect(db.lessons).toEqual([
-      expect.objectContaining({ text: 'Op zware baan wint Hessel B vaker.', draverijId: ID, place: 'Wolvega' }),
+      expect.objectContaining({ tekst: 'Op zware baan wint Hessel B vaker.', draverijId: ID, baan: 'Wolvega' }),
     ])
     expect((await call('GET', '/terugblik', { as: user })).body.koersdagen[0].evaluated).toBe(true)
     // Fetching the uitslagen and evaluating counted once for today
@@ -337,7 +345,7 @@ describe('owner', () => {
   })
 
   it('lists and deletes lessons', async () => {
-    db.lessons.push({ id: 'l-1', text: 'Les', createdAt: '2026-08-15T19:00:00.000Z', draverijId: ID, place: 'Wolvega', date: '2026-08-15' })
+    db.lessons.push({ id: 'l-1', tekst: 'Les', createdAt: '2026-08-15T19:00:00.000Z', draverijId: ID, baan: 'Wolvega' })
     expect((await call('GET', '/lessons', { as: friend })).status).toBe(403)
     expect((await call('GET', '/lessons', { as: user })).body.lessons).toHaveLength(1)
     expect((await call('DELETE', '/lessons/{id}', { as: friend, params: { id: 'l-1' } })).status).toBe(403)
