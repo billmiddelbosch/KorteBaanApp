@@ -103,6 +103,12 @@ const router = createRouter({
       component: linkView,
       meta: { title: 'Nieuw wachtwoord', public: true, standalone: true },
     },
+    {
+      path: '/oauth/authorize',
+      name: 'oauth-authorize',
+      component: () => import('../views/oauth/OAuthAuthorizeView.vue'),
+      meta: { title: 'Koppelen', standalone: true },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

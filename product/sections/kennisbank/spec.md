@@ -68,12 +68,12 @@ Stand na fase 1: een draverij heeft `detail` `volledig` (rittenverloop-pdf), `ui
   - Harde data (draverijen, deelnames, koppels, ritten, weer, ratings) is één waarheid; alleen de `kbIngest`-job schrijft die, niet per omgeving.
   - Wat de AI of een gebruiker schrijft (claims, lessen, voorspellingen, voorlopige koppels uit Koersdag) krijgt `origin` = `dev` of `prod`. De prod-AI leest standaard alleen `prod`-kennis; de dev-AI leest alles. Testruns vervuilen zo het geheugen van de echte AI niet, en de eigenaar kan een dev-les promoveren.
   - Schemawijzigingen raken meteen productie: migraties alleen additief (kolom/tabel toevoegen; nooit hernoemen of verwijderen in dezelfde release), met een migratie-script dat de eigenaar vóór de deploy draait.
-  - MCP en OAuth alleen op `prod` (inloggen met je productie-account); `dev` heeft geen MCP-endpoint.
+  - MCP en OAuth draaien op beide stages: `/prod/mcp` (inloggen met je productie-account, schrijft `origin` = `prod`) en `/dev/mcp` (account van test.kortebaan.nl, `origin` = `dev`), zodat je eerst via staging kunt testen.
 - **Toegang vanuit Lambda**: `pg` + IAM-token via `@aws-sdk/dsql-signer`, geen VPC. `dsql-signer` zit niet in de Lambda-runtime, dus in deze bundles meebundelen (uitzondering op `--external:@aws-sdk/*`). Connectie buiten de handler hergebruiken (verbinden kost ~0,5 s, queries 30–90 ms).
 - **Rollen**: `admin` alleen voor migraties; `kb_writer` voor ingest en workers; `kb_reader` (alleen `SELECT`) voor `kb_sql` en leestools, gekoppeld aan de Lambda-rol via `AWS IAM GRANT`.
 - **Gedeelde module** `lambda/src/lib/kb/`: schema/migraties, queries, dossierbouwer, tooldefinities en -implementaties. Workers en MCP-server gebruiken dezelfde code.
 - **Workers**: `askClaude` krijgt ondersteuning voor custom tools (tool_use → tool_result-loop naast de bestaande `pause_turn`-loop). Analysechat en Koersdag krijgen het dossier in de prompt; het `<feiten>`-blok vervalt.
-- **MCP-server**: Lambda `kbMcp` (streamable HTTP) achter API Gateway `/mcp`, alleen prod.
+- **MCP-server**: Lambda `kbMcp` (streamable HTTP, stateless: elke POST is één JSON-RPC-bericht, geen sessies of SSE) achter API Gateway `/mcp`. Zonder geldig token een 401 met `WWW-Authenticate: Bearer resource_metadata=…`.
 - **OAuth 2.1** (authorization code + PKCE + dynamic client registration) in Lambda `oauth`, login via de bestaande KorteBaan-accounts (Vue-route `/oauth/authorize`), tokens gehasht in DynamoDB. Scopes: `kb:read` (alle gebruikers), `kb:write` en `kb:sql` (eigenaar).
 - **Ingest**: Lambda `kbIngest` (na elke draverij, via EventBridge-schedule) en een lokaal backfill-script (`lambda/scripts/kb-backfill.ts`) met dezelfde parsers; idempotente upserts op natuurlijke sleutels, batches < 3.000 rijen per transactie, retry bij optimistic-concurrency-conflicten.
 - **Ratings**: Glicko-2 per paard (en per ondergrond), herberekend na ingest; eerst backtest (Brier-score, rendement tegen historische totalisator-uitbetalingen) voordat de AI er gewicht aan geeft.
@@ -131,13 +131,26 @@ Resources: `kb://schema` (tabellen en betekenis), `kb://reglement`, `kb://entity
    - `kbIngest` draait dagelijks om 05:00 UTC over de draverijen van de laatste 21 dagen (of handmatig met `{"event": "/events/…"}`). Het is één functie voor dev en prod.
    - `npm run kb-backfill` doet de eenmalige backfill. Met `--dry-run` wordt alleen opgehaald en geparsed.
    - Uitgesteld: ZEturf- en verenigingssite-parsers.
-2. **Dossier + tools in de workers + ratings**
-   - Custom tools in `askClaude`; het dossier in Analysechat en Koersdag; het `<feiten>`-blok eruit.
-   - Loting en uitslagbord worden live voorlopige data, met de startzijde uit de lotingfoto.
-   - Voorspellingen vastleggen en scoren in Terugblik.
-   - Voorverkenning vóór een draverij en de wekelijkse vorm-scraper in het seizoen.
-   - Glicko-2 met backtest.
-3. **MCP + OAuth (prod)** — `kbMcp`, `oauth`, `/oauth/authorize`, `.mcp.json` in deze repo, claude.ai-connector
+2. **Dossier + tools in de workers + ratings** — ✅ kern gebouwd, nog niet gedeployd.
+   - Custom tools in `askClaude` (`runTool`, `maxToolRounds`, `searchBudget`). Het dossier staat in Analysechat en Koersdag, vóór het advies. Het `<feiten>`-blok is weg: feiten gaan via `kb_record_claim`.
+   - Koersdag legt de winkansen per koppel vast (`kb.prediction`, AI, rating en tote).
+   - Terugblik scoort die kansen tegen de uitslag. De scorecard (Brier-scores en missers) en de te toetsen lessen gaan mee in de evaluatie. Lessen zijn gestructureerd (`tekst`, `paarden`, `pikeurs`, `baan`) en worden bevestigd of weerlegd via `lescontrole`.
+   - Lessen staan in de kennisbank (`kb.lesson`) in plaats van DynamoDB; `kb-migrate --lessons-table` zet de oude over.
+   - Glicko-2 met backtest in `kb.meta` (`rating_backtest`). Ratings komen pas in het dossier bij ≥ 100 koppels en een Brier-score < 0,24.
+   - `kbIngest` scoort voorspellingen van gewijzigde draverijen en herberekent de ratings. `{"ratings": true}` herberekent alleen.
+   - KB_HOST en `dsql:DbConnect` gelden voor alle kennisbank-schrijvers (output `KbWriterRoleArns`).
+   - Uitgesteld:
+     - loting en uitslagbord als live voorlopige data, met de startzijde uit de lotingfoto
+     - voorverkenning vóór een draverij
+     - de wekelijkse vorm-scraper in het seizoen
+     - ratings per ondergrond
+     - vermoeidheid (minuten sinds de vorige rit)
+3. **MCP + OAuth** — ✅ gebouwd, nog niet gedeployd.
+   - `oauth`: discovery (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration` onder de stage), dynamic client registration (alleen publieke clients, redirect https of loopback), authorization code + PKCE S256, access token 1 uur, refresh token 30 dagen en roterend. Tokens gehasht in de app-tabel met TTL. Bij elk gebruik worden status, `tokenVersion` en rol opnieuw gecontroleerd; een vriend houdt alleen `kb:read`.
+   - Toestemmingspagina `/oauth/authorize` in de Vue-app (inloggen vereist, daarna Toestaan/Weigeren).
+   - `kbMcp`-tools: `kb_field`, `kb_entity`, `kb_matchups`, `kb_conditions`, `kb_search`, `kb_lessons` (read), `kb_record_claim`, `kb_record_lesson` (write), `kb_sql` (sql, als `kb_reader`, max. 200 rijen, 10 s). Resource `kb://schema`. Claims via MCP krijgen bron `ai-mcp`.
+   - `kb-migrate --reader-arn` met output `KbReaderRoleArns`; de MCP-url staat in output `McpUrlProd` en in `.mcp.json`.
+   - Uitgesteld: `kb_form`, `kb_head_to_head`, `kb_pikeur_stats`, `kb_resolve`, resources `kb://reglement` en `kb://entity/…`.
 4. **Curatie-UI** — tabblad "Kennisbank" voor de eigenaar
 
 ## Configuration

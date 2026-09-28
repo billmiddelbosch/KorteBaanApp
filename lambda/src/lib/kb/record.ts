@@ -276,7 +276,8 @@ export function statRecord(place: string, coords: EventPage['coords'], stat: Sta
     kbbEventId: null,
     source,
     sources: [source],
-    deelnames: stat.winner ? [emptyDeelname(stat.winner, stat.rider, { klassering: 1 })] : [],
+    // A placeholder like "-" is no winner
+    deelnames: stat.winner && nameKey(stat.winner) ? [emptyDeelname(stat.winner, stat.rider, { klassering: 1 })] : [],
     koppels: [],
   }
 }

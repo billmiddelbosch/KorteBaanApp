@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kortebaan-kennisbank": {
+      "type": "http",
+      "url": "https://API_ID.execute-api.eu-west-2.amazonaws.com/prod/mcp"
+    }
+  }
+}

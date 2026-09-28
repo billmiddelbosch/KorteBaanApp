@@ -1,14 +1,14 @@
-import { randomUUID } from 'node:crypto'
 import type { Context } from 'aws-lambda'
 import { DEFAULT_INSTRUCTION, type Source } from './lib/analysis'
-import { getAdvice, getInstruction, saveLessons } from './lib/analysisStore'
+import { getAdvice, getInstruction } from './lib/analysisStore'
 import { askClaude, ClaudeError, type ChatImage } from './lib/claude'
 import { aliasOf, type Alias } from './lib/http'
+import * as kb from './lib/kb/service'
 import { totals, UNREADABLE_ERROR, type KoersdagRecord } from './lib/koersdag'
 import { getKoersdag, KoersdagChangedError, putKoersdag } from './lib/koersdagStore'
 import { deletePhoto, readPhoto } from './lib/photos'
 import { readClaudeToken } from './lib/secrets'
-import { getAiConfig, putAiConfig, putSession } from './lib/store'
+import { dayOf, getAiConfig, putAiConfig, putSession } from './lib/store'
 import {
   buildEvaluationPrompt,
   buildResultsPrompt,
@@ -16,7 +16,9 @@ import {
   parseResults,
   RESULTS_NOT_FOUND,
   type Evaluation,
+  type LessonCheck,
   type OmloopResult,
+  type ParsedLesson,
 } from './lib/terugblik'
 import type { WorkerJob } from './lib/worker'
 
@@ -25,7 +27,7 @@ const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000
 
 type Outcome =
   | { results: OmloopResult[]; sources: Source[] }
-  | { evaluation: Evaluation; lessons: string[] }
+  | { evaluation: Evaluation; lessons: ParsedLesson[]; checks: LessonCheck[] }
   | { error: string }
 
 // Merges into the latest version (the user may correct bets meanwhile); drops the result
@@ -71,8 +73,11 @@ async function run(alias: Alias, record: KoersdagRecord): Promise<Outcome> {
 
   if (step === 'evaluate') {
     if (!review.results?.length) return { error: 'Bevestig eerst de uitslagen.' }
-    const advice = await getAdvice(alias, record.userId, record.draverij.id)
-    const { system, text } = buildEvaluationPrompt({ instruction, record, advice, results: review.results })
+    const [advice, kennisbank] = await Promise.all([
+      getAdvice(alias, record.userId, record.draverij.id),
+      kb.evaluationContext(alias, record.draverij),
+    ])
+    const { system, text } = buildEvaluationPrompt({ instruction, record, advice, results: review.results, ...kennisbank })
     const reply = await askClaude(token, { system, turns: [{ role: 'user', text }], timeoutMs: CLAUDE_TIMEOUT_MS })
     const parsed = parseEvaluation(reply.text, new Date().toISOString())
     if (!parsed) {
@@ -129,7 +134,7 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
   })
   if (!saved || !('evaluation' in outcome)) return
 
-  // The list shows "geëvalueerd"; lessons go to the shared kennisbank, invisible to the player
+  // The list shows "geëvalueerd"; lessons go to the kennisbank, invisible to the player
   const { staked, paidOut } = totals(saved)
   await putSession(alias, saved.userId, {
     id: saved.draverij.id,
@@ -139,16 +144,8 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
     paidOut,
     evaluated: true,
   }).catch(console.error)
-  const createdAt = outcome.evaluation.createdAt
-  await saveLessons(
-    alias,
-    outcome.lessons.map((text) => ({
-      id: randomUUID(),
-      text,
-      createdAt,
-      draverijId: saved.draverij.id,
-      place: saved.draverij.place,
-      date: saved.draverij.date,
-    })),
-  ).catch((err) => console.error('Saving lessons failed', err))
+  // Lessons about this kortebaan unless the AI named another; failures are logged by the service
+  const lessons = outcome.lessons.map((l) => ({ ...l, baan: l.baan ?? saved.draverij.place }))
+  await kb.checkLessons(alias, outcome.checks, dayOf())
+  await kb.saveLessons(alias, lessons, saved.draverij.id)
 }
