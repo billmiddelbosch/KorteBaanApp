@@ -32,19 +32,26 @@ export async function connect({ host, region = process.env.AWS_REGION ?? 'eu-wes
   return client
 }
 
-let cached: { key: string; client: pg.Client; since: number; broken: boolean } | null = null
+// One client per host and role (the MCP server uses both kb_writer and kb_reader)
+const cached = new Map<string, { client: pg.Client; since: number; broken: boolean }>()
 
 // Reused client for Lambda handlers
 export async function kbClient(config: KbConfig): Promise<pg.Client> {
   const key = `${config.host}|${config.role}`
-  if (cached && cached.key === key && !cached.broken && Date.now() - cached.since < MAX_AGE_MS) return cached.client
-  if (cached) await cached.client.end().catch(() => {})
+  const hit = cached.get(key)
+  if (hit && !hit.broken && Date.now() - hit.since < MAX_AGE_MS) return hit.client
+  if (hit) {
+    cached.delete(key)
+    await hit.client.end().catch(() => {})
+  }
   const client = await connect(config)
-  const entry = { key, client, since: Date.now(), broken: false }
-  client.on('error', () => {
+  const entry = { client, since: Date.now(), broken: false }
+  const markBroken = () => {
     entry.broken = true
-  })
-  cached = entry
+  }
+  client.on('error', markBroken)
+  client.on('end', markBroken)
+  cached.set(key, entry)
   return client
 }
 

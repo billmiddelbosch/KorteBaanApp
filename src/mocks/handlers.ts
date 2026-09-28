@@ -9,6 +9,7 @@ import type {
   Source,
 } from '@/types/analyse'
 import type { Koersdag, KoersdagToday, KoersdagUpdate, UpdateKind } from '@/types/koersdag'
+import type { OAuthConsent, OAuthScope } from '@/types/oauth'
 import type { OmloopResult, ReviewStep, TerugblikDetail } from '@/types/terugblik'
 import {
   analyseDb,
@@ -17,6 +18,7 @@ import {
   koersdagDb,
   terugblikDb,
   MOCK_DEFAULT_INSTRUCTION,
+  MOCK_OAUTH_CLIENT,
   newLinkToken,
   userForLink,
   userForToken,
@@ -27,7 +29,7 @@ import {
 } from './data'
 
 // Mirrors the Lambda handlers in lambda/src (auth, me, friends, aiConnection, analysis,
-// aiInstruction, koersdag, terugblik):
+// aiInstruction, koersdag, terugblik, oauth):
 // same routes, response shapes and Dutch messages.
 
 const BASE = '/api'
@@ -704,6 +706,59 @@ function sumUp(rows: { staked: number; paidOut: number }[]) {
 }
 
 type Body = Record<string, unknown>
+
+// ── OAuth (consent page of the kennisbank MCP server) ──
+
+const OAUTH_SCOPES: Record<OAuthScope, string> = {
+  'kb:read': 'De kennisbank lezen: paarden, pikeurs, koppels, edities, feiten en lessen.',
+  'kb:write': 'Feiten en lessen aan de kennisbank toevoegen.',
+  'kb:sql': 'Eigen leesvragen (SQL) op de kennisbank uitvoeren.',
+}
+
+// Loopback redirects may use any port, like the Lambda
+function oauthRedirectMatches(uri: string): boolean {
+  try {
+    const url = new URL(uri)
+    return MOCK_OAUTH_CLIENT.redirectUris.some((known) => {
+      const k = new URL(known)
+      return url.protocol === k.protocol && url.hostname === k.hostname && url.pathname === k.pathname
+    })
+  } catch {
+    return false
+  }
+}
+
+// Checks the client's authorize query; returns the scopes the user gets or an error response
+function checkAuthorize(user: MockUser, q: Record<string, unknown>): OAuthScope[] | Response {
+  if (q.client_id !== MOCK_OAUTH_CLIENT.clientId) {
+    return fail(400, 'Deze app is niet (meer) bekend. Start het koppelen opnieuw vanuit de app.')
+  }
+  if (typeof q.redirect_uri !== 'string' || !oauthRedirectMatches(q.redirect_uri)) {
+    return fail(400, 'De terugkeer-adres van deze app klopt niet. Start het koppelen opnieuw.')
+  }
+  if (q.response_type !== 'code') {
+    return fail(400, 'Deze app vraagt een soort toegang die we niet ondersteunen.')
+  }
+  if (
+    q.code_challenge_method !== 'S256' ||
+    typeof q.code_challenge !== 'string' ||
+    q.code_challenge.length < 43
+  ) {
+    return fail(400, 'Deze app gebruikt geen veilige koppeling (PKCE). Koppelen kan niet.')
+  }
+  const allowed: OAuthScope[] =
+    user.role === 'owner' ? ['kb:read', 'kb:write', 'kb:sql'] : ['kb:read']
+  const asked =
+    typeof q.scope === 'string' && q.scope.trim() ? q.scope.trim().split(/s+/) : allowed
+  const scopes = allowed.filter((s) => asked.includes(s))
+  return scopes.length ? scopes : fail(403, 'Je account heeft geen toegang tot wat deze app vraagt.')
+}
+
+function oauthRedirect(uri: string, values: Record<string, unknown>): string {
+  const url = new URL(uri)
+  for (const [k, v] of Object.entries(values)) if (typeof v === 'string') url.searchParams.set(k, v)
+  return url.toString()
+}
 
 export const handlers = [
   http.get(`${BASE}/health`, async () => {
@@ -1553,5 +1608,36 @@ export const handlers = [
     if (index < 0) return fail(404, 'Deze les bestaat niet (meer).')
     terugblikDb.lessons.splice(index, 1)
     return HttpResponse.json({ ok: true })
+  }),
+
+  // ── OAuth ─────────────────────────────────────────────────────────────
+
+  http.get(`${BASE}/oauth/authorize`, async ({ request }) => {
+    await delay(LAG)
+    const { user, error } = authenticate(request)
+    if (error) return error
+    const query = Object.fromEntries(new URL(request.url).searchParams)
+    const scopes = checkAuthorize(user, query)
+    if (scopes instanceof Response) return scopes
+    const consent: OAuthConsent = {
+      client: { name: MOCK_OAUTH_CLIENT.name, redirectHost: new URL(query.redirect_uri!).host },
+      scopes: scopes.map((scope) => ({ scope, description: OAUTH_SCOPES[scope] })),
+    }
+    return HttpResponse.json(consent)
+  }),
+
+  http.post(`${BASE}/oauth/authorize`, async ({ request }) => {
+    await delay(LAG)
+    const { user, error } = authenticate(request)
+    if (error) return error
+    const body = (await request.json()) as Body
+    const scopes = checkAuthorize(user, body)
+    if (scopes instanceof Response) return scopes
+    const uri = body.redirect_uri as string
+    const redirectTo =
+      body.approve === true
+        ? oauthRedirect(uri, { code: 'mock-oauth-code', state: body.state })
+        : oauthRedirect(uri, { error: 'access_denied', state: body.state })
+    return HttpResponse.json({ redirectTo })
   }),
 ]

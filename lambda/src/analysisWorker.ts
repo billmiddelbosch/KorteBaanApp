@@ -4,21 +4,22 @@ import {
   DEFAULT_INSTRUCTION,
   MAX_REPLY_CHARS,
   buildSystemPrompt,
-  parseReply,
   type ChatRecord,
 } from './lib/analysis'
-import { ChatChangedError, getChat, getInstruction, listFacts, listLessons, putChat, saveKnowledge } from './lib/analysisStore'
+import { ChatChangedError, getChat, getInstruction, putChat, saveKnowledge } from './lib/analysisStore'
 import { askClaude, ClaudeError } from './lib/claude'
 import { sha256 } from './lib/crypto'
 import { aliasOf, type Alias } from './lib/http'
+import * as kb from './lib/kb/service'
 import { readClaudeToken } from './lib/secrets'
 import { dayOf, getAiConfig, putAiConfig } from './lib/store'
 import type { WorkerJob } from './lib/worker'
 
 // Leave room within the Lambda timeout (5 min) to save the result
 const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000
-const KB_FACTS_IN_PROMPT = 40
-const KB_LESSONS_IN_PROMPT = 20
+// Rounds of kennisbank tool calls and web searches per turn
+const KB_TOOL_ROUNDS = 4
+const SEARCH_BUDGET = 8
 
 async function save(alias: Alias, job: WorkerJob, chat: ChatRecord) {
   try {
@@ -51,23 +52,23 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
       await fail('De AI is nog niet gekoppeld. Vraag de eigenaar om de AI-koppeling in te stellen.')
       return
     }
-    const [instruction, facts, lessons] = await Promise.all([
-      getInstruction(alias),
-      listFacts(alias, KB_FACTS_IN_PROMPT),
-      listLessons(alias, KB_LESSONS_IN_PROMPT),
-    ])
+    const today = dayOf()
+    const [instruction, dossier] = await Promise.all([getInstruction(alias), kb.dossier(alias, chat.draverij, today)])
+    // Tools only when the dossier could be read: then the kennisbank is reachable
+    const kbTools = dossier ? await kb.workerTools(alias, chat.draverij, 'analysis', today) : null
     const system = buildSystemPrompt({
       instruction: instruction?.text ?? DEFAULT_INSTRUCTION,
       draverij: chat.draverij,
-      today: dayOf(),
-      facts,
-      lessons,
+      today,
+      kennisbank: dossier,
     })
 
     const reply = await askClaude(token, {
       system,
       turns: chat.messages.map((m) => ({ role: m.role, text: m.text })),
       timeoutMs: CLAUDE_TIMEOUT_MS,
+      searchBudget: SEARCH_BUDGET,
+      ...(kbTools ? { ...kbTools, maxToolRounds: KB_TOOL_ROUNDS } : {}),
     })
 
     const now = new Date().toISOString()
@@ -89,11 +90,10 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
       updatedAt: now,
     })
 
-    // Kennisbank: facts and sources are shared by everyone; failing here shouldn't lose the reply
-    const { facts: newFacts } = parseReply(reply.text)
+    // Sources seen online; facts go into the kennisbank via kb_record_claim
     await saveKnowledge(
       alias,
-      newFacts.map((text) => ({ id: randomUUID(), text, draverijId: chat.draverij.id, createdAt: now })),
+      [],
       reply.sources.map((s) => ({ ...s, hash: sha256(s.url), lastSeenAt: now, draverijId: chat.draverij.id })),
     ).catch((err) => console.error('Saving knowledge failed', err))
   } catch (err) {

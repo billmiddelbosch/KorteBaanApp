@@ -70,6 +70,11 @@ describe('statRecord', () => {
     expect(r.source.kind).toBe('kbb_statistieken')
   })
 
+  it('keeps no winner for a placeholder name', () => {
+    const row = { ...page.stats.find((s) => s.year === 2021)!, winner: '-' }
+    expect(statRecord("'t Zand", page.coords, row, URL_2025)!.deelnames).toEqual([])
+  })
+
   it('skips a cancelled year without a date', () => {
     expect(statRecord("'t Zand", page.coords, page.stats.find((s) => s.year === 2020)!, URL_2025)).toBeNull()
   })

@@ -73,8 +73,6 @@ vi.mock('./lib/analysisStore', async (importOriginal) => {
       void db.advice.set(key(userId, advice.draverij.id), clone(advice)),
     getInstruction: async () => clone(db.instruction),
     putInstruction: async (_a: string, record: InstructionRecord) => void (db.instruction = clone(record)),
-    listFacts: async () => [],
-    listLessons: async () => [],
     saveKnowledge: async (_a: string, facts: unknown[]) => void db.facts.push(...facts),
   }
 })
@@ -225,7 +223,8 @@ describe('chatting', () => {
     expect((await send('nog iets')).status).toBe(409)
     await runWorker()
     expect(db.usage.get(friend.id)).toBe(1)
-    expect(db.facts).toEqual([expect.objectContaining({ text: 'Fleur won vorige week', draverijId: id })])
+    // Facts go into the kennisbank via kb_record_claim, not from a <feiten> block
+    expect(db.facts).toEqual([])
 
     const chat = (await call(analysis, 'GET', '/analyses/{id}', { as: friend, params: { id } })).body
     const reply = chat.messages[3]

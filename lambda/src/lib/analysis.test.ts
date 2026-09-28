@@ -82,14 +82,20 @@ describe('buildSystemPrompt', () => {
       instruction: 'Je bent een expert.',
       draverij: draverijOf('Wolvega', '2026-10-03'),
       today: '2026-09-27',
-      facts: [{ id: 'f1', text: 'Feit A', draverijId: 'x', createdAt: '' }],
-      lessons: [],
+      kennisbank: '## Kennisbank (stand 2026-09-26)\nWolvega: 10 edities.',
     })
     expect(prompt.startsWith('Je bent een expert.')).toBe(true)
     expect(prompt).toContain('Wolvega op zaterdag 3 oktober 2026')
-    expect(prompt).toContain('- Feit A')
-    expect(prompt).toContain('<advies>')
-    expect(prompt).not.toContain('Lessen uit eerdere adviezen')
+    expect(prompt).toContain('Wolvega: 10 edities.')
+    expect(prompt).toContain('kb_record_claim')
+    expect(prompt.indexOf('## Kennisbank')).toBeLessThan(prompt.indexOf('<advies>'))
+    expect(prompt).not.toContain('<feiten>')
+  })
+
+  it('leaves the kennisbank out without one and says so when it is unreachable', () => {
+    const base = { instruction: 'X', draverij: draverijOf('Wolvega', '2026-10-03'), today: '2026-09-27' }
+    expect(buildSystemPrompt(base)).not.toContain('Kennisbank')
+    expect(buildSystemPrompt({ ...base, kennisbank: null })).toContain('De kennisbank is nu niet bereikbaar')
   })
 })
 

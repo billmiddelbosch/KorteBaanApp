@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseEvaluation, parseResults, readResults, RESULTS_NOT_FOUND, effectiveReviewStatus, emptyReview } from './terugblik'
+import type { KoersdagRecord } from './koersdag'
+import { buildEvaluationPrompt, parseEvaluation, parseResults, readResults, RESULTS_NOT_FOUND, effectiveReviewStatus, emptyReview } from './terugblik'
 
 const block = (tag: string, body: unknown) => `Toelichting.\n<${tag}>${JSON.stringify(body)}</${tag}>`
 
@@ -32,7 +33,21 @@ describe('parseEvaluation', () => {
     const raw = block('evaluatie', {
       oordeel: 'Goede dag.',
       omlopen: [{ omloop: 1, klopte: 'ja', advies: 'Winnaar: Fleur', winnaar: 'Fleur', waarom: 'Sterk.' }],
-      lessen: ['a', '', 'b', 'c', 'd', 'e', 'f'],
+      lessen: [
+        'a',
+        '',
+        { tekst: 'b', paarden: ['Fleur', 3], pikeurs: ['J. Bakker'], baan: 'Wolvega' },
+        { paarden: ['zonder tekst'] },
+        'c',
+        'd',
+        'e',
+        'f',
+      ],
+      lescontrole: [
+        { id: '4f0c', oordeel: 'bevestigd' },
+        { id: '9a1b', oordeel: 'misschien' },
+        { oordeel: 'weerlegd' },
+      ],
     })
     const parsed = parseEvaluation(raw, '2026-08-15T19:00:00.000Z')
     expect(parsed?.evaluation).toEqual({
@@ -40,7 +55,14 @@ describe('parseEvaluation', () => {
       omlopen: [{ omloop: 1, correct: null, advice: 'Winnaar: Fleur', winner: 'Fleur', reason: 'Sterk.' }],
       createdAt: '2026-08-15T19:00:00.000Z',
     })
-    expect(parsed?.lessons).toEqual(['a', 'b', 'c', 'd', 'e'])
+    expect(parsed?.lessons).toEqual([
+      { tekst: 'a', paarden: [], pikeurs: [] },
+      { tekst: 'b', paarden: ['Fleur'], pikeurs: ['J. Bakker'], baan: 'Wolvega' },
+      { tekst: 'c', paarden: [], pikeurs: [] },
+      { tekst: 'd', paarden: [], pikeurs: [] },
+      { tekst: 'e', paarden: [], pikeurs: [] },
+    ])
+    expect(parsed?.checks).toEqual([{ id: '4f0c', oordeel: 'bevestigd' }])
   })
 
   it('rejects an empty evaluation', () => {
@@ -68,5 +90,36 @@ describe('effectiveReviewStatus', () => {
     const review = { ...emptyReview(), status: 'thinking' as const, thinkingSince: '2026-08-15T19:00:00.000Z' }
     expect(effectiveReviewStatus(review, Date.parse('2026-08-15T19:01:00.000Z')).status).toBe('thinking')
     expect(effectiveReviewStatus(review, Date.parse('2026-08-15T19:30:00.000Z')).status).toBe('error')
+  })
+})
+
+describe('buildEvaluationPrompt', () => {
+  const record = {
+    draverij: { id: '2026-08-15-wolvega', place: 'Wolvega', date: '2026-08-15' },
+    userId: 'me',
+    budget: 50,
+    bets: [],
+    updates: [],
+    omloop: 1,
+  } as unknown as KoersdagRecord
+  const base = { instruction: 'x', record, advice: undefined, results: [{ omloop: 1, winner: 'Fleur', places: '' }] }
+
+  it('adds the scorecard and lessons to check, and asks for a verdict per lesson', () => {
+    const { system } = buildEvaluationPrompt({
+      ...base,
+      scorecard: '8 koppels met een vastgelegde winkans.',
+      lessonsToCheck: ['[les abc] Links wint vaker'],
+    })
+    expect(system).toContain('## Voorspellingen tegen de uitslag (kennisbank)\n8 koppels')
+    expect(system).toContain('## Te toetsen lessen')
+    expect(system).toContain('- [les abc] Links wint vaker')
+    expect(system).toContain('"lescontrole"')
+  })
+
+  it('leaves the kennisbank parts out without data', () => {
+    const { system } = buildEvaluationPrompt(base)
+    expect(system).not.toContain('kennisbank)')
+    expect(system).not.toContain('lescontrole')
+    expect(system).toContain('"paarden"')
   })
 })
