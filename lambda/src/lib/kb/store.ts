@@ -157,24 +157,29 @@ export async function writeRecord(client: pg.Client, resolver: Resolver, record:
 
   const src = sourceId(record.source.url)
   const pending = emptyPending()
-  const deelnames = record.deelnames.map((d) => ({
-    d,
-    horse: resolver.resolve('horse', d.horse, pending, src)!,
-    pikeur: d.pikeur ? resolver.resolve('pikeur', d.pikeur, pending, src) : null,
-    stal: d.stal ? resolver.resolve('stal', { name: d.stal }, pending, src) : null,
-  }))
+  // A name without letters or digits (e.g. "-" in the statistieken) resolves to null: skip it
+  const deelnames = record.deelnames
+    .map((d) => ({
+      d,
+      horse: resolver.resolve('horse', d.horse, pending, src),
+      pikeur: d.pikeur ? resolver.resolve('pikeur', d.pikeur, pending, src) : null,
+      stal: d.stal ? resolver.resolve('stal', { name: d.stal }, pending, src) : null,
+    }))
+    .filter((x): x is typeof x & { horse: string } => x.horse !== null)
   const horseOf = (name: string | null) => (name ? resolver.resolve('horse', { name }, pending, src) : null)
   const pikeurOf = (name: string | null) => (name ? resolver.resolve('pikeur', { name }, pending, src) : null)
-  const koppels = record.koppels.map((k) => ({
-    k,
-    id: `${record.id}:${k.omloop}:${k.nr}`,
-    a: horseOf(k.a)!,
-    b: horseOf(k.b),
-    pikeurA: pikeurOf(k.pikeurA),
-    pikeurB: pikeurOf(k.pikeurB),
-    winner: horseOf(k.winner),
-    ritten: k.ritten.map((name) => horseOf(name)),
-  }))
+  const koppels = record.koppels
+    .map((k) => ({
+      k,
+      id: `${record.id}:${k.omloop}:${k.nr}`,
+      a: horseOf(k.a),
+      b: horseOf(k.b),
+      pikeurA: pikeurOf(k.pikeurA),
+      pikeurB: pikeurOf(k.pikeurB),
+      winner: horseOf(k.winner),
+      ritten: k.ritten.map((name) => horseOf(name)),
+    }))
+    .filter((x): x is typeof x & { a: string } => x.a !== null)
 
   // Sources, baan and new entities are idempotent, so they go before the draverij transaction
   await tx(client, async (c) => {

@@ -92,8 +92,16 @@ async function main() {
     const sorted = [...records.values()].sort((a, b) => a.date.localeCompare(b.date))
     let written = 0
     let weather = 0
+    const failed: string[] = []
     for (const r of sorted) {
-      if ((await writeRecord(client, resolver, r)) === 'written') written++
+      // One bad draverij must not stop the rest of the history
+      try {
+        if ((await writeRecord(client, resolver, r)) === 'written') written++
+      } catch (err) {
+        console.error(`${r.id} mislukt: ${(err as Error).message}`)
+        failed.push(r.id)
+        continue
+      }
       if (!r.cancelled && r.baan.lat !== null && r.baan.lon !== null) {
         await sleep(200)
         const w = await fetchWeather(r.baan.lat, r.baan.lon, r.date, today).catch(() => null)
@@ -104,6 +112,7 @@ async function main() {
       }
     }
     console.log(`Geschreven: ${written} draverijen, ${weather} met weer`)
+    if (failed.length) console.log(`Mislukt (${failed.length}): ${failed.join(', ')}`)
   } finally {
     await client.end()
   }
