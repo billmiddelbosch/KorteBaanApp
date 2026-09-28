@@ -22,7 +22,7 @@ import {
 } from './queries'
 import { PREDICATES, recordClaims, type ClaimInput } from './write'
 
-export type ToolMode = 'analysis' | 'koersdag'
+export type ToolMode = 'analysis' | 'koersdag' | 'mcp'
 
 const names = { type: 'array', items: { type: 'string' } }
 
@@ -101,6 +101,7 @@ export const KB_TOOLS: Record<string, CustomTool> = {
 const MODE_TOOLS: Record<ToolMode, string[]> = {
   analysis: ['kb_field', 'kb_entity', 'kb_matchups', 'kb_conditions', 'kb_search', 'kb_record_claim'],
   koersdag: ['kb_field', 'kb_entity', 'kb_matchups', 'kb_record_claim'],
+  mcp: ['kb_field', 'kb_entity', 'kb_matchups', 'kb_conditions', 'kb_search', 'kb_record_claim'],
 }
 
 export interface ToolContext {

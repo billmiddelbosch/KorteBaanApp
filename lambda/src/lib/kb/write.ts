@@ -153,7 +153,13 @@ export interface LessonInput {
 
 export const NEW_LESSON_CONFIDENCE = 0.5
 
-export async function saveLessons(client: pg.Client, env: Env, lessons: LessonInput[], draverijId: string | null): Promise<string[]> {
+export async function saveLessons(
+  client: pg.Client,
+  env: Env,
+  lessons: LessonInput[],
+  draverijId: string | null,
+  createdBy = 'terugblik',
+): Promise<string[]> {
   const ids: string[] = []
   for (const lesson of lessons) {
     const text = String(lesson.tekst ?? '').trim().slice(0, 500)
@@ -163,7 +169,7 @@ export async function saveLessons(client: pg.Client, env: Env, lessons: LessonIn
     await tx(client, async (c) => {
       await c.query(
         `insert into kb.lesson (id, text, scope, evidence, confidence, draverij_id, created_by, origin)
-         values ($1, $2, $3, $4, $5, $6, 'terugblik', $7)`,
+         values ($1, $2, $3, $4, $5, $6, $8, $7)`,
         [
           id,
           text,
@@ -172,6 +178,7 @@ export async function saveLessons(client: pg.Client, env: Env, lessons: LessonIn
           NEW_LESSON_CONFIDENCE,
           draverijId,
           env,
+          createdBy,
         ],
       )
       const known = subjects.filter((s) => s.kind !== 'onbekend')

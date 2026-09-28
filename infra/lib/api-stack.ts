@@ -197,6 +197,9 @@ export class ApiStack extends cdk.Stack {
       TERUGBLIK_WORKER_NAME: terugblikWorkerFn.functionName,
     })
 
+    // OAuth for the kennisbank MCP server: discovery, client registration, consent and tokens
+    const oauthFn = accountFn('OAuthFunction', 'oauth', 'OAuth for the kennisbank MCP server')
+
     const accountFunctions = [
       authFn,
       meFn,
@@ -206,6 +209,7 @@ export class ApiStack extends cdk.Stack {
       aiInstructionFn,
       koersdagFn,
       terugblikFn,
+      oauthFn,
     ]
     for (const fn of accountFunctions) {
       for (const env of envs) {
@@ -293,13 +297,23 @@ export class ApiStack extends cdk.Stack {
 
     // Besides the ingest, the AI workers read the kennisbank and write claims, win chances and
     // lessons, and the Terugblik API lists and removes lessons; all as kb_writer
-    const kbWriters = [kbIngestFn, analysisWorkerFn, koersdagWorkerFn, terugblikWorkerFn, terugblikFn]
-    for (const fn of kbWriters) {
+    // The MCP server (Claude Code / claude.ai, behind OAuth): the kennisbank tools as kb_writer and
+    // kb_sql as kb_reader. Checks its OAuth tokens in the table; no session secret needed.
+    const kbMcpFn = makeFn('KbMcpFunction', 'kbMcp', 'kbMcp.handler', 'Kennisbank MCP server (OAuth)', {
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(29),
+      environment: { TABLE_DEV: tables.dev.tableName, TABLE_PROD: tables.prod.tableName },
+    })
+    for (const env of envs) tables[env].grantReadData(kbMcpFn)
+
+    const kbWriters = [kbIngestFn, analysisWorkerFn, koersdagWorkerFn, terugblikWorkerFn, terugblikFn, kbMcpFn]
+    const kbReaders = [kbMcpFn]
+    for (const fn of new Set([...kbWriters, ...kbReaders])) {
       fn.addEnvironment('KB_HOST', kbHost)
       fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['dsql:DbConnect'], resources: [kbCluster.attrResourceArn] }))
     }
 
-    const functions = [healthFn, ...accountFunctions]
+    const functions = [healthFn, ...accountFunctions, kbMcpFn]
 
     // ── Lambda aliases ───────────────────────────────────────────────────────
     // Every function gets a `dev` and `prod` alias; the handler reads its alias from
@@ -380,6 +394,16 @@ export class ApiStack extends cdk.Stack {
       ['PATCH', '/terugblik/{id}/bets/{betId}', terugblikFn],
       ['GET', '/lessons', terugblikFn],
       ['DELETE', '/lessons/{id}', terugblikFn],
+      ['GET', '/.well-known/oauth-protected-resource', oauthFn],
+      ['GET', '/.well-known/oauth-authorization-server', oauthFn],
+      ['GET', '/.well-known/openid-configuration', oauthFn],
+      ['POST', '/oauth/register', oauthFn],
+      ['GET', '/oauth/authorize', oauthFn],
+      ['POST', '/oauth/authorize', oauthFn],
+      ['POST', '/oauth/token', oauthFn],
+      ['POST', '/mcp', kbMcpFn],
+      ['GET', '/mcp', kbMcpFn],
+      ['DELETE', '/mcp', kbMcpFn],
     ]
     const methods = routes.map(([method, route, fn]) =>
       api.root.resourceForPath(route).addMethod(method, aliasIntegration(fn)),
@@ -429,6 +453,14 @@ export class ApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'KbWriterRoleArns', {
       value: cdk.Fn.join(',', kbWriters.map((fn) => fn.role!.roleArn)),
       description: '--writer-arn for kb-migrate (all functions that use the kennisbank)',
+    })
+    new cdk.CfnOutput(this, 'KbReaderRoleArns', {
+      value: cdk.Fn.join(',', kbReaders.map((fn) => fn.role!.roleArn)),
+      description: '--reader-arn for kb-migrate (kb_sql of the MCP server)',
+    })
+    new cdk.CfnOutput(this, 'McpUrlProd', {
+      value: prodStage.urlForPath('/mcp'),
+      description: 'Kennisbank MCP server (Claude Code .mcp.json / claude.ai connector)',
     })
   }
 }

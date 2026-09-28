@@ -187,6 +187,13 @@ export const WOLVEGA = draverij('Wolvega', 6)
 export const HOLLANDSCHEVELD = draverij('Hollandscheveld', 13)
 export const SCHAGEN = draverij('Schagen', 20)
 
+// A registered MCP client (Claude Code) for the OAuth consent page
+export const MOCK_OAUTH_CLIENT = {
+  clientId: 'mcp-client-mock',
+  name: 'Claude Code',
+  redirectUris: ['http://localhost:33418/callback'],
+}
+
 export const MOCK_DEFAULT_INSTRUCTION = `Je bent expert op het gebied van kortebaandraverijen in Nederland. Je volgt meerjarig alle uitslagen en zoekt verbanden in hoe koersen gelopen en gewonnen worden: paarden, pikeurs, stallen, de baan en de omstandigheden. In je kansbepaling neem je ook de meest recente uitslagen en berichtgeving mee.
 
 Werkwijze:
