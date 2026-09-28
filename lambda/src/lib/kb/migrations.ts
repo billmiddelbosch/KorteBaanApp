@@ -10,6 +10,7 @@
 // and is written only by kbIngest. What the AI or a user writes (claims, lessons, predictions,
 // voorlopige koppels) carries origin 'dev' or 'prod'.
 import type pg from 'pg'
+import { ZIJDE_ALTIJD, ZIJDE_REGEL_VANAF } from './zijde'
 
 export interface Migration {
   id: string
@@ -108,7 +109,7 @@ export const MIGRATIONS: Migration[] = [
         source_id text references kb.source (id),
         primary key (draverij_id, horse_id)
       )`,
-      // id = "<draverij id>:<omloop>:<koppel nr>"; zijde = links | rechts (known from 2026 on)
+      // id = "<draverij id>:<omloop>:<koppel nr>"; zijde = links | rechts in rit 1 (see zijde.ts)
       `create table if not exists kb.koppel (
         id text primary key,
         draverij_id text not null references kb.draverij (id),
@@ -241,6 +242,37 @@ export const MIGRATIONS: Migration[] = [
       )`,
       `create index async if not exists lesson_status on kb.lesson (status)`,
       `create index async if not exists claim_status on kb.claim (status)`,
+    ],
+  },
+  {
+    // Baanzijde uit het wedstrijdreglement (zie zijde.ts); kbIngest vult hem voortaan zelf
+    id: '003-zijde',
+    statements: [
+      `update kb.koppel k
+       set zijde_a = s.zijde_a, zijde_b = s.zijde_b
+       from (
+         select k2.id,
+           case when da.startnr > db.startnr then 'links' else 'rechts' end as zijde_a,
+           case when da.startnr > db.startnr then 'rechts' else 'links' end as zijde_b
+         from kb.koppel k2
+         join kb.draverij d on d.id = k2.draverij_id
+         join kb.deelname da on da.draverij_id = k2.draverij_id and da.horse_id = k2.horse_a
+         join kb.deelname db on db.draverij_id = k2.draverij_id and db.horse_id = k2.horse_b
+         where (d.date >= date '${ZIJDE_REGEL_VANAF}' or d.baan_id in (${ZIJDE_ALTIJD.map((b) => `'${b}'`).join(', ')}))
+           and da.afstand is not null and da.afstand = db.afstand
+       ) s
+       where s.id = k.id and k.zijde_a is null`,
+      // Zijde per rit: rit 1 en de kamprit (3) zoals in het koppel, rit 2 omgekeerd
+      `create or replace view kb.rit_zijde as
+       select t.koppel_id, t.nr as rit, k.horse_a, k.horse_b,
+         case when t.nr in (1, 3) then k.zijde_a else k.zijde_b end as zijde_horse_a,
+         case when t.nr in (1, 3) then k.zijde_b else k.zijde_a end as zijde_horse_b,
+         t.winner,
+         case when t.winner = k.horse_a then (case when t.nr in (1, 3) then k.zijde_a else k.zijde_b end)
+              when t.winner = k.horse_b then (case when t.nr in (1, 3) then k.zijde_b else k.zijde_a end)
+         end as zijde_winnaar
+       from kb.rit t
+       join kb.koppel k on k.id = t.koppel_id`,
     ],
   },
 ]

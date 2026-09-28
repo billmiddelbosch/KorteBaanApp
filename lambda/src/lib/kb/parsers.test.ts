@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { eventLinks, parseEventPage } from './kbbond'
 import { pdfLines, toLines, type PdfItem } from './pdf'
+import { firstOmloop, parseProgramma } from './programma'
 import { parseRitverloop } from './ritverloop'
 import { garbledMatcher, nameKey, parseEuro } from './text'
 import { parseUitslagPdf } from './uitslagPdf'
@@ -128,6 +129,68 @@ describe('parseRitverloop', () => {
     expect(r.omlopen[3]!.rows[0]).toMatchObject({ name: 'Fast Money As', riders: ['Aad Pools'] })
     expect(r.uitslag[1]).toMatchObject({ place: 2, name: 'Fast Money As', riders: ['Lindsey Pegram', 'Aad Pools'], prijs: 1450 })
     expect(r.omlopen.at(-1)!.koppels.map((k) => k.winner)).toEqual([23, 2])
+  })
+
+  // Every koppel has a winner, and each winner reaches the next (non-beslissende) omloop
+  const expectComplete = (r: ReturnType<typeof parseRitverloop>) => {
+    for (const [i, omloop] of r.omlopen.entries()) {
+      for (const k of omloop.koppels) expect(k.winner, `omloop ${omloop.nr} koppel ${k.nr}`).not.toBeNull()
+      const next = r.omlopen[i + 1]
+      if (next && !next.beslissend) {
+        const startnrs = next.rows.map((row) => row.startnr)
+        for (const k of omloop.koppels) expect(startnrs).toContain(k.winner)
+      }
+    }
+  }
+
+  it('reads lowercase x marks (Roden 2026)', () => {
+    const r = parseRitverloop(lines('ritverloop-roden-2026.json'))
+    expect(r.omlopen.map((o) => o.rows.length)).toEqual([16, 8, 4, 4])
+    // Global Ufo (1) beat Korr Lez du Trieux (2) in I and II
+    expect(r.omlopen[0]!.koppels[0]).toEqual({ nr: 1, a: 1, b: 2, ritten: [1, 1], winner: 1 })
+    expectComplete(r)
+  })
+
+  it('keeps the S marker out of the horse name (Stompwijk 2026)', () => {
+    const r = parseRitverloop(lines('ritverloop-stompwijk-2026.json'))
+    const tweede = r.omlopen[1]!
+    expect(tweede.rows.map((row) => row.name)).toContain('Medusa J')
+    expect(r.omlopen.flatMap((o) => o.rows).filter((row) => /^S /.test(row.name))).toEqual([])
+    expect(tweede.rows.find((row) => row.name === 'Liberty Newport')).toMatchObject({ bijgeloot: false, riders: ['Rick Wester'] })
+    expectComplete(r)
+    // No "UITSLAG:" heading: the classification still ends up in the uitslag, not in the omloop
+    expect(r.omlopen.at(-1)!.rows).toHaveLength(4)
+    expect(r.uitslag.map((u) => u.name)).toEqual(['Carezza', "Offend'em", 'Liberty Newport', 'I Dream With You', 'Proud Pearl', 'Poza Rica Boko'])
+  })
+
+  it('gives a walkover to the opponent of a niet-starter (Lisse 2026)', () => {
+    const r = parseRitverloop(lines('ritverloop-lisse-2026.json'))
+    const beslissend = r.omlopen.at(-1)!
+    expect(beslissend.rows.find((row) => row.name === 'Global Ufo')).toMatchObject({ nietGestart: true, riders: [] })
+    // Despot Power (13) against the niet-starter Global Ufo (19)
+    expect(beslissend.koppels[1]).toEqual({ nr: 2, a: 19, b: 13, ritten: [], winner: 13 })
+    expectComplete(r)
+  })
+})
+
+describe('parseProgramma', () => {
+  const p = parseProgramma(lines('programma-roden-2026.json'))
+
+  it('reads the startlijst without the marker and the uitgelote reserves', () => {
+    expect(p.date).toBe('2026-09-23')
+    expect(p.entries).toHaveLength(16)
+    expect(p.entries[6]).toEqual({ startnr: 7, name: 'Go for Manny' })
+    expect(p.entries.map((e) => e.name)).not.toContain('Leo GS')
+  })
+
+  it('pairs the first omloop like the rittenverloop does', () => {
+    const koppels = firstOmloop(p)
+    expect(koppels).toHaveLength(8)
+    expect(koppels[5]).toEqual({ koppel: 6, a: 'Diapason', b: 'Ginger Bi' })
+    // By startnr: the names differ now and then ("Liberty Newport TF" in the programma)
+    const nrOf = (name: string | null) => p.entries.find((e) => e.name === name)?.startnr
+    const r = parseRitverloop(lines('ritverloop-roden-2026.json'))
+    expect(r.omlopen[0]!.koppels.map((k) => [k.a, k.b])).toEqual(koppels.map((k) => [nrOf(k.a), nrOf(k.b)]))
   })
 })
 

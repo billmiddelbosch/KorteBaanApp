@@ -5,7 +5,7 @@ import type pg from 'pg'
 import type { Scope } from '../oauth'
 import { kbTools, KB_TOOLS } from './tools'
 import type { Env } from './queries'
-import { listLessons, saveLessons, type LessonInput } from './write'
+import { LESSON_STATUSES, listLessons, saveLessons, setLessonStatus, type LessonInput, type LessonStatus } from './write'
 
 export const SUPPORTED_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
 export const DEFAULT_VERSION = '2025-06-18'
@@ -89,6 +89,22 @@ export const MCP_TOOLS: McpTool[] = [
     annotations: { readOnlyHint: false },
   },
   {
+    name: 'kb_lesson_status',
+    title: 'Status van een les',
+    description:
+      'Wijzig de status van een les (id uit kb_lessons of kb_search): vervangen als een nieuwere les hem vervangt, betwist als de data hem tegenspreekt, verwijderd als hij onjuist is, actief om hem terug te zetten. Alleen lessen van deze omgeving.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Uuid van de les' },
+        status: { type: 'string', enum: [...LESSON_STATUSES] },
+      },
+      required: ['id', 'status'],
+    },
+    scope: 'kb:write',
+    annotations: { readOnlyHint: false },
+  },
+  {
     name: 'kb_sql',
     title: 'SQL (alleen lezen)',
     description: `Voer één SELECT uit op de kennisbank (Postgres-dialect, Aurora DSQL, schema kb; zie resource kb://schema). Alleen lezen, max ${SQL_ROW_LIMIT} rijen, max ${SQL_TIMEOUT_MS / 1000} s. Gebruik dit voor vragen die de andere tools niet beantwoorden.`,
@@ -101,7 +117,10 @@ export const MCP_TOOLS: McpTool[] = [
 const SCHEMA_NOTES = `Alle tabellen staan in schema \`kb\`. Kolom \`origin\`: 'shared' = officiële data (uitslagen, weer),
 'dev'/'prod' = door de AI of eigenaar vastgelegd in die omgeving. Claims en lessen hebben een \`status\`
 (actief, vervangen, betwist, verwijderd); gebruik meestal \`status = 'actief'\`. Koppels zijn tweekampen (a tegen b)
-binnen een draverij; \`winner\` is 'a' of 'b'. Namen staan genormaliseerd in \`kb.alias\`.`
+binnen een draverij; \`winner\` is 'a' of 'b'. Namen staan genormaliseerd in \`kb.alias\`.
+\`koppel.zijde_a\`/\`zijde_b\` = baan (links/rechts, gezien vanaf de start) in rit 1 en de kamprit; in rit 2 omgekeerd.
+Bekend vanaf 2025 (Medemblik alle jaren) bij gelijke afstand, anders leeg. View \`kb.rit_zijde\` geeft de zijde per rit
+en \`zijde_winnaar\`.`
 
 export type RpcId = string | number | null
 export interface RpcResponse {
@@ -197,6 +216,13 @@ async function callTool(ctx: McpContext, name: string, args: Record<string, unkn
       const lessons = (Array.isArray(args.lessen) ? args.lessen : []).slice(0, 5) as LessonInput[]
       const ids = await saveLessons(await ctx.writer(), ctx.env, lessons, null, 'mcp')
       return ids.length ? `${ids.length} les(sen) vastgelegd.` : 'Geen les met tekst meegegeven.'
+    }
+    case 'kb_lesson_status': {
+      const id = String(args.id ?? '').trim()
+      const status = String(args.status ?? '') as LessonStatus
+      if (!LESSON_STATUSES.includes(status)) throw new RpcError(-32602, `Onbekende status: ${status} (${LESSON_STATUSES.join(', ')})`)
+      const changed = await setLessonStatus(await ctx.writer(), ctx.env, id, status)
+      return changed ? `Les ${id} staat nu op ${status}.` : `Les ${id} niet gewijzigd: onbekend, van een andere omgeving of al ${status}.`
     }
     default: {
       const { runTool } = kbTools({ client: await ctx.writer(), env: ctx.env, today: ctx.today, place: '' }, 'mcp')

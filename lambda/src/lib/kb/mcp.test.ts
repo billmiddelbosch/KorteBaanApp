@@ -60,6 +60,20 @@ describe('mcp handleMessage', () => {
     expect(tools.find((t) => t.name === 'kb_conditions')?.inputSchema).toMatchObject({ required: ['baan'] })
   })
 
+  it('changes the status of a lesson of its own environment', async () => {
+    const id = 'dbe33cae-802f-4862-b979-35d782fff00a'
+    const writer = fakeClient([[/update kb\.lesson set status/, [{}]]])
+    const call = (args: Record<string, unknown>, scopes: McpContext['scopes'] = ['kb:write']) =>
+      handleMessage(rpc('tools/call', { name: 'kb_lesson_status', arguments: args }), context(scopes, writer))
+
+    const res = await call({ id, status: 'vervangen' })
+    expect((res?.result as { content: { text: string }[] }).content[0]!.text).toContain('staat nu op vervangen')
+    expect(writer.client.query).toHaveBeenCalledWith(expect.stringContaining('origin = $2'), [id, 'prod', 'vervangen'])
+
+    expect((await call({ id, status: 'weg' }))?.error).toMatchObject({ code: -32602 })
+    expect((await call({ id, status: 'vervangen' }, ['kb:read']))?.error).toMatchObject({ code: -32602 })
+  })
+
   it('refuses a tool outside the scopes', async () => {
     const res = await handleMessage(rpc('tools/call', { name: 'kb_sql', arguments: { sql: 'select 1' } }), context(['kb:read']))
     expect(res?.error).toMatchObject({ code: -32602 })

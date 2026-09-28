@@ -258,13 +258,15 @@ export interface SideStats {
   rechts: number
 }
 
-// Koppels won from the left and right lane at this baan (known from 2026 on)
+// Ritten won from the left and right lane at this baan (zijde known where the reglement fixes it, see zijde.ts)
 export async function sideStats(client: pg.Client, baanId: string): Promise<SideStats> {
   const res = await client.query<{ links: string; rechts: string }>(
-    `select count(*) filter (where (k.zijde_a = 'links' and k.winner = k.horse_a) or (k.zijde_b = 'links' and k.winner = k.horse_b)) as links,
-       count(*) filter (where (k.zijde_a = 'rechts' and k.winner = k.horse_a) or (k.zijde_b = 'rechts' and k.winner = k.horse_b)) as rechts
-     from kb.koppel k join kb.draverij d on d.id = k.draverij_id
-     where d.baan_id = $1 and k.status = 'definitief' and k.winner is not null and k.zijde_a is not null`,
+    `select count(*) filter (where z.zijde_winnaar = 'links') as links,
+       count(*) filter (where z.zijde_winnaar = 'rechts') as rechts
+     from kb.rit_zijde z
+     join kb.koppel k on k.id = z.koppel_id
+     join kb.draverij d on d.id = k.draverij_id
+     where d.baan_id = $1 and k.status = 'definitief' and z.zijde_winnaar is not null`,
     [baanId],
   )
   return { links: Number(res.rows[0]?.links ?? 0), rechts: Number(res.rows[0]?.rechts ?? 0) }
