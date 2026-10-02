@@ -42,6 +42,21 @@ const verdict = computed(
 
 const betFor = (suggestion: Suggestion) => props.bets.find((b) => b.suggestionId === suggestion.id)
 
+const decimal = (n: number) => n.toLocaleString('nl-NL', { maximumFractionDigits: 2 })
+const percent = (n: number) => `${Math.round(n * 100)}%`
+
+// "Kans 40% · quota 3,2 · verwachting +28%", or the break-even quota when the board is unknown
+function valueLine(s: Suggestion): { text: string; positive: boolean | null } | null {
+  if (s.chance == null) return null
+  const parts = [`Kans ${percent(s.chance)}`]
+  if (s.odds != null && s.expectedValue != null) {
+    parts.push(`quota ${decimal(s.odds)}`, `verwachting ${s.expectedValue > 0 ? '+' : ''}${percent(s.expectedValue)}`)
+    return { text: parts.join(' · '), positive: s.expectedValue > 0 }
+  }
+  if (s.minOdds != null) parts.push(`zinvol vanaf quota ${decimal(s.minOdds)}`)
+  return { text: parts.join(' · '), positive: null }
+}
+
 // ── Inline "Ingezet" form ──
 const editingId = ref<string | null>(null)
 const amountText = ref('')
@@ -148,6 +163,20 @@ function confirmBet(suggestion: Suggestion) {
           </div>
           <p class="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
             {{ suggestion.bet }}
+          </p>
+          <p
+            v-if="valueLine(suggestion)"
+            :class="[
+              'mt-0.5 text-sm font-medium tabular-nums',
+              valueLine(suggestion)!.positive === true
+                ? 'text-emerald-700 dark:text-emerald-400'
+                : valueLine(suggestion)!.positive === false
+                  ? 'text-red-700 dark:text-red-400'
+                  : 'text-slate-700 dark:text-slate-300',
+            ]"
+            data-testid="suggestion-value"
+          >
+            {{ valueLine(suggestion)!.text }}
           </p>
           <p v-if="suggestion.reasoning" class="mt-0.5 text-sm text-slate-600 dark:text-slate-400">
             {{ suggestion.reasoning }}

@@ -44,6 +44,8 @@ test.describe('Koersdag', () => {
 
     // Mark the advice as placed; the amount is prefilled from the suggestion
     const advice = page.getByRole('region', { name: 'Advies' })
+    // Chance and board quota give the expected value per euro
+    await expect(advice.getByText('Kans 40% · quota 3,2 · verwachting +28%')).toBeVisible()
     await advice.getByRole('button', { name: 'Ingezet' }).click()
     await expect(advice.getByLabel('Hoeveel heb je ingezet?')).toHaveValue('20')
     await advice.getByRole('button', { name: 'Opslaan' }).click()
@@ -71,6 +73,8 @@ test.describe('Koersdag', () => {
     await page.getByRole('button', { name: 'Volgende omloop' }).click()
     await expect(page.getByRole('heading', { name: '2e omloop' })).toBeVisible()
     await expect(page.getByText('Nieuw: Hessel B', { exact: false })).toBeVisible(AI_TIMEOUT)
+    // Without a board quota: from which quota the bet is worth it
+    await expect(page.getByText('Kans 60% · zinvol vanaf quota 1,67')).toBeVisible()
 
     await page.getByRole('button', { name: 'Volgende omloop' }).click()
     await expect(page.getByRole('heading', { name: '3e omloop' })).toBeVisible()
