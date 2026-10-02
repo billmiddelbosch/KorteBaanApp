@@ -197,6 +197,13 @@ describe('koersdag prompt', () => {
     expect(prompt('fetch').system).not.toContain('## Kennisbank')
   })
 
+  it('asks for kennisbank tools in one batch and does not ask to record facts', () => {
+    const { system } = prompt('fetch', { kennisbank: '## Kennisbank (stand 2026-09-22)' })
+    expect(system).toContain('in één beurt tegelijk')
+    expect(system).not.toContain('kb_record_claim')
+    expect(system).not.toContain('zoek altijd online')
+  })
+
   it('asks a photo check to transcribe the board and leaves ZEturf out', () => {
     const { text } = prompt('photo')
     expect(text).toContain('"bord"')

@@ -321,6 +321,55 @@ describe('during the koersdag', () => {
     expect(friendSystem).toContain('- 3 Fleur: winnend 4,1')
   })
 
+  it('checks several photos of the board in one run', async () => {
+    const id = await started()
+    const photo = (body: unknown) => call('POST', '/koersdagen/{id}/photo', { as: user, params: { id }, body })
+    const png = { mediaType: 'image/png', image: PNG }
+    const jpeg = { mediaType: 'image/jpeg', image: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64') }
+    expect((await photo({ images: [] })).body.message).toBe('Maak eerst een foto.')
+    expect((await photo({ images: [png, png, png, png] })).body.message).toBe("Stuur maximaal 3 foto's tegelijk.")
+    expect((await photo({ images: [png, { mediaType: 'image/png' }] })).body.message).toBe('Maak eerst een foto.')
+    const big = { mediaType: 'image/png', image: PNG + 'A'.repeat(2_000_000) }
+    expect((await photo({ images: [big, big, big] })).status).toBe(413)
+    // A refused request leaves nothing behind
+    expect(db.photos.size).toBe(0)
+
+    const sent = await photo({ images: [png, jpeg] })
+    expect(sent.status).toBe(202)
+    expect([...db.photos.values()].map((p) => p.contentType)).toEqual(['image/png', 'image/jpeg'])
+
+    vi.mocked(askClaude).mockResolvedValueOnce(
+      reply({ foto: { klopt: true }, bord: { quota: ['3 Fleur: winnend 4,1'], loting: ['Koppel 1: Fleur – Hessel'] }, advies: { keuzes: [] } }),
+    )
+    await runWorker()
+    const ask = vi.mocked(askClaude).mock.calls[1][1]
+    expect(ask.turns[0].images).toEqual([
+      { mediaType: 'image/png', data: PNG },
+      { mediaType: 'image/jpeg', data: jpeg.image },
+    ])
+    expect(ask.turns[0].text).toContain("Bijgevoegd zijn 2 foto's")
+    // Both photos are removed once checked, and the board is read as one
+    expect(db.photos.size).toBe(0)
+    expect(db.board).toHaveLength(1)
+    expect(db.koersdagen.get(`${user.id}/${id}`)).toMatchObject({ status: 'idle', photos: undefined })
+  })
+
+  it('still checks the single photo of a run started by the older API', async () => {
+    const id = await started()
+    expect((await call('POST', '/koersdagen/{id}/photo', { as: user, params: { id }, body: { mediaType: 'image/png', image: PNG } })).status).toBe(202)
+    // Rewrite the run as the older API stored it
+    const record = db.koersdagen.get(`${user.id}/${id}`)!
+    const [{ key, mediaType }] = record.photos!
+    db.koersdagen.set(`${user.id}/${id}`, { ...record, photos: undefined, photoKey: key, photoMediaType: mediaType })
+
+    vi.mocked(askClaude).mockResolvedValueOnce(reply({ foto: { klopt: true }, advies: { keuzes: [] } }))
+    await runWorker()
+    const ask = vi.mocked(askClaude).mock.calls[1][1]
+    expect(ask.turns[0].images).toEqual([{ mediaType: 'image/png', data: PNG }])
+    expect(ask.turns[0].text).toContain('Bijgevoegd is een foto')
+    expect(db.photos.size).toBe(0)
+  })
+
   it('moves to the next omloop and records an unreadable reply as an error', async () => {
     const id = await started()
     const next = await call('POST', '/koersdagen/{id}/next', { as: user, params: { id } })

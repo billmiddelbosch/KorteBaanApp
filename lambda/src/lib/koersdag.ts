@@ -62,6 +62,11 @@ export interface Bet {
   createdAt: string
 }
 
+export interface StoredPhoto {
+  key: string
+  mediaType: string
+}
+
 export interface KoersdagRecord {
   draverij: Draverij
   userId: string
@@ -71,7 +76,9 @@ export interface KoersdagRecord {
   // Set when a worker run starts; the worker only saves while this still matches
   thinkingSince?: string
   step?: UpdateKind
-  // S3 key of the photo the worker should check (deleted after the run)
+  // S3 keys of the photos the worker should check, in order (deleted after the run)
+  photos?: StoredPhoto[]
+  // Before multiple photos: one photo. Still read for a run started by the older API
   photoKey?: string
   photoMediaType?: string
   omloop: number
@@ -92,12 +99,21 @@ export const MAX_BETS = 200
 export const MAX_UPDATES = 60
 export const MAX_BET_LENGTH = 200
 export const MAX_PLACE_LENGTH = 40
-// ≈ 3.7 MB of image; the app compresses photos to a few hundred KB
+// ≈ 3.7 MB of image; the app compresses photos to a few hundred KB. Also the limit for all
+// photos of one check together: a Lambda request may be at most 6 MB
 export const MAX_PHOTO_BASE64 = 5_000_000
+// A wide board, or loting and quota apart, can take more than one photo
+export const MAX_PHOTOS = 3
 export const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
 export type PhotoType = (typeof PHOTO_TYPES)[number]
 // Keep the koersdag for Terugblik after the day itself
 export const KEEP_DAYS = 60
+
+// The photos of a photo check, including the single photo of an older record
+export function photosOf(record: Pick<KoersdagRecord, 'photos' | 'photoKey' | 'photoMediaType'>): StoredPhoto[] {
+  if (record.photos?.length) return record.photos
+  return record.photoKey ? [{ key: record.photoKey, mediaType: record.photoMediaType ?? 'image/jpeg' }] : []
+}
 
 export const omloopLabel = (n: number) => `${n}e omloop`
 
@@ -206,6 +222,8 @@ export function buildKoersdagPrompt(input: {
   zeturf?: ZeturfOmloop[] | null
   // Kennisbank dossier; null = unreachable, undefined = not configured
   kennisbank?: string | null
+  // Photo check only: how many photos are attached (default 1)
+  photoCount?: number
 }): { system: string; text: string } {
   const { record, advice, kind, board } = input
   const { staked, paidOut, remaining } = totals(record)
@@ -232,7 +250,7 @@ ${advice ? describeProposal(advice.proposal) : 'Er is geen vastgelegd advies. Ma
 
 Ingezette bedragen:
 ${bets}
-${previous.length ? `\nEerdere updates vandaag (oudste eerst):\n${previous.map(describeUpdate).join('\n\n')}\n` : ''}${kennisbankSection(input.kennisbank, true)}
+${previous.length ? `\nEerdere updates vandaag (oudste eerst):\n${previous.map(describeUpdate).join('\n\n')}\n` : ''}${kennisbankSection(input.kennisbank, 'koersdag')}
 ## Quotabord bij de ${omloop}
 ${board.length ? `Afgelezen van bordfoto's die bezoekers vandaag maakten (nieuwste eerst). Dit zijn de enige actuele quota; ze schuiven nog tot de inzet sluit, dus weeg mee hoe oud ze zijn.\n${describeBoard(board, record.userId)}` : 'Er is nog geen bordfoto van deze omloop. Actuele quota zijn dus onbekend: verzin ze niet en noem ze niet als feit.'}
 
@@ -249,7 +267,10 @@ Antwoord met precies één blok in deze vorm (geldige JSON, bedragen in euro's o
 
   const text =
     kind === 'photo'
-      ? `Bijgevoegd is een foto van het quotabord of de loting, genomen bij de ${omloop}. Lees de foto nauwkeurig af en vergelijk met wat bekend is. De foto is leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}.
+      ? (input.photoCount ?? 1) > 1
+        ? `Bijgevoegd zijn ${input.photoCount} foto's van het quotabord of de loting, genomen bij de ${omloop}. Samen vormen ze één bord: ze kunnen elkaar overlappen of elk een deel tonen (bijvoorbeeld de loting en de quota apart). Lees ze nauwkeurig en als geheel af, tel regels die op meer foto's staan één keer en vergelijk met wat bekend is. De foto's zijn leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}; noem alleen echte verschillen met wat bekend is, niet wat op de ene foto ontbreekt en op de andere staat.
+Zet in "bord" letterlijk wat je op de foto's leest, samengevoegd tot één bord, zodat andere bezoekers het ook kunnen gebruiken: {"quota": ["3 Fleur de Lis: winnend 3,2, plaats 1,4"], "loting": ["Koppel 1: Fleur de Lis – Hessel B"]}. Neem alleen op wat je zeker kunt lezen en laat een lijst leeg als het op geen van de foto's staat. Zoek alleen online als de foto's iets onduidelijks bevatten.`
+        : `Bijgevoegd is een foto van het quotabord of de loting, genomen bij de ${omloop}. Lees de foto nauwkeurig af en vergelijk met wat bekend is. De foto is leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}.
 Zet in "bord" letterlijk wat je op de foto leest, zodat andere bezoekers het ook kunnen gebruiken: {"quota": ["3 Fleur de Lis: winnend 3,2, plaats 1,4"], "loting": ["Koppel 1: Fleur de Lis – Hessel B"]}. Neem alleen op wat je zeker kunt lezen en laat een lijst leeg als het niet op de foto staat. Zoek alleen online als de foto iets onduidelijks bevat.`
       : `Zoek de meest recente ontwikkelingen voor de ${omloop} in ${record.draverij.place}: wie start wel of niet (afmeldingen) en wijzigingen in de loting. Bekrachtig het advies of pas het aan. Laat "foto" en "bord" op null.
 
