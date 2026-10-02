@@ -32,6 +32,8 @@ import { zeturfOmlopen } from './lib/zeturf'
 const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000
 // The koersdag is time-critical: few kennisbank rounds
 const KB_TOOL_ROUNDS = 2
+// Room for the whole answer: a board read from several photos plus advice and kansen
+const MAX_TOKENS = 16_000
 
 type Outcome = { update: KoersdagUpdate } | { error: string }
 
@@ -108,6 +110,7 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
     turns: [{ role: 'user', text, images }],
     timeoutMs: CLAUDE_TIMEOUT_MS,
     webFetch: kind === 'fetch',
+    maxTokens: MAX_TOKENS,
     ...(kbTools ? { ...kbTools, maxToolRounds: KB_TOOL_ROUNDS } : {}),
   })
 
