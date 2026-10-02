@@ -342,7 +342,8 @@ function saveInstruction(text: string) {
 const KOERSDAG_GONE = 'Deze koersdag bestaat niet (meer).'
 const KOERSDAG_FINISHED = 'Deze koersdag is al afgerond.'
 const MAX_AMOUNT = 10_000
-const MAX_PHOTO_BASE64 = 5_000_000
+const MAX_PHOTO_BASE64 = 5_000_000 // per photo, and all photos of one board together
+const MAX_PHOTOS = 3
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 const euro = (n: number) =>
@@ -721,7 +722,9 @@ function oauthRedirectMatches(uri: string): boolean {
     const url = new URL(uri)
     return MOCK_OAUTH_CLIENT.redirectUris.some((known) => {
       const k = new URL(known)
-      return url.protocol === k.protocol && url.hostname === k.hostname && url.pathname === k.pathname
+      return (
+        url.protocol === k.protocol && url.hostname === k.hostname && url.pathname === k.pathname
+      )
     })
   } catch {
     return false
@@ -748,10 +751,11 @@ function checkAuthorize(user: MockUser, q: Record<string, unknown>): OAuthScope[
   }
   const allowed: OAuthScope[] =
     user.role === 'owner' ? ['kb:read', 'kb:write', 'kb:sql'] : ['kb:read']
-  const asked =
-    typeof q.scope === 'string' && q.scope.trim() ? q.scope.trim().split(/s+/) : allowed
+  const asked = typeof q.scope === 'string' && q.scope.trim() ? q.scope.trim().split(/s+/) : allowed
   const scopes = allowed.filter((s) => asked.includes(s))
-  return scopes.length ? scopes : fail(403, 'Je account heeft geen toegang tot wat deze app vraagt.')
+  return scopes.length
+    ? scopes
+    : fail(403, 'Je account heeft geen toegang tot wat deze app vraagt.')
 }
 
 function oauthRedirect(uri: string, values: Record<string, unknown>): string {
@@ -1326,21 +1330,32 @@ export const handlers = [
     const { user, entry, error } = koersdagFor(request, params.id)
     if (error) return error
     const body = (await request.json()) as Body
-    if (
-      typeof body.mediaType !== 'string' ||
-      !['image/jpeg', 'image/png', 'image/webp'].includes(body.mediaType)
-    ) {
-      return fail(400, 'Gebruik een foto (JPG, PNG of WebP).')
+    // Several photos of one board as `images`; the older single-photo body still works
+    const list = (Array.isArray(body.images) ? body.images : [body]) as Body[]
+    if (!list.length) return fail(400, 'Maak eerst een foto.')
+    if (list.length > MAX_PHOTOS) return fail(400, `Stuur maximaal ${MAX_PHOTOS} foto's tegelijk.`)
+    let total = 0
+    for (const photo of list) {
+      if (
+        typeof photo?.mediaType !== 'string' ||
+        !['image/jpeg', 'image/png', 'image/webp'].includes(photo.mediaType)
+      ) {
+        return fail(400, 'Gebruik een foto (JPG, PNG of WebP).')
+      }
+      const image = typeof photo.image === 'string' ? photo.image : ''
+      if (!image) return fail(400, 'Maak eerst een foto.')
+      if (image.length > MAX_PHOTO_BASE64) {
+        return fail(
+          413,
+          'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.',
+        )
+      }
+      if (!sniffBase64(image)) return fail(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
+      total += image.length
     }
-    const image = typeof body.image === 'string' ? body.image : ''
-    if (!image) return fail(400, 'Maak eerst een foto.')
-    if (image.length > MAX_PHOTO_BASE64) {
-      return fail(
-        413,
-        'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.',
-      )
+    if (total > MAX_PHOTO_BASE64) {
+      return fail(413, "De foto's zijn samen te groot. Stuur minder foto's tegelijk.")
     }
-    if (!sniffBase64(image)) return fail(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
     const refused = startUpdate(user, entry, 'photo')
     if (refused) return refused
     return HttpResponse.json(koersdagView(entry), { status: 202 })

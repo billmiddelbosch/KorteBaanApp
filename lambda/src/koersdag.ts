@@ -9,6 +9,7 @@ import {
   MAX_BETS,
   MAX_BUDGET,
   MAX_PHOTO_BASE64,
+  MAX_PHOTOS,
   MAX_PLACE_LENGTH,
   MAX_UPDATES,
   PHOTO_TYPES,
@@ -18,6 +19,7 @@ import {
   totals,
   type Bet,
   type KoersdagRecord,
+  type StoredPhoto,
   type UpdateKind,
 } from './lib/koersdag'
 import { getKoersdag, KoersdagChangedError, putKoersdag } from './lib/koersdagStore'
@@ -77,17 +79,36 @@ async function mutate(
   }
 }
 
+// One photo from the request body; the declared type only filters, the bytes decide
+function readPhoto(value: unknown): { bytes: Uint8Array; mediaType: string; size: number } {
+  const body = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const mediaType = body.mediaType
+  if (typeof mediaType !== 'string' || !(PHOTO_TYPES as readonly string[]).includes(mediaType)) {
+    throw new HttpError(400, 'Gebruik een foto (JPG, PNG of WebP).')
+  }
+  const image = readString(body, 'image', 'Maak eerst een foto.')
+  if (image.length > MAX_PHOTO_BASE64) {
+    throw new HttpError(413, 'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.')
+  }
+  const bytes = new Uint8Array(Buffer.from(image, 'base64'))
+  const actualType = sniffImage(bytes)
+  if (!actualType) throw new HttpError(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
+  return { bytes, mediaType: actualType, size: image.length }
+}
+
 // Checks the AI connection and daily limit, then hands the update to the worker
 async function startUpdate(
   req: RouteRequest,
   user: UserRecord,
   kind: UpdateKind,
   prepare: (record: KoersdagRecord) => void = () => {},
-  photo?: { bytes: Uint8Array; mediaType: string },
+  photos: { bytes: Uint8Array; mediaType: string }[] = [],
 ): Promise<KoersdagRecord> {
   // Kept across mutate() retries, so a retry neither counts twice nor uploads twice
-  let photoKey: string | undefined
+  let stored: StoredPhoto[] | undefined
   let countedDay: string | undefined
+  const removePhotos = () =>
+    Promise.all((stored ?? []).map((p) => deletePhoto(req.alias, p.key).catch(console.error)))
   const started = await mutate(req, user, async (record) => {
     assertIdle(record)
     if (record.updates.length >= MAX_UPDATES) {
@@ -96,9 +117,10 @@ async function startUpdate(
     countedDay ??= await claimAiRun(req.alias, user, record.countedDay)
     record.countedDay = countedDay
     prepare(record)
-    if (photo && !photoKey) {
-      photoKey = `${user.id}/${record.draverij.id}/${randomUUID()}`
-      await putPhoto(req.alias, photoKey, photo.bytes, photo.mediaType)
+    if (photos.length && !stored) {
+      const prefix = `${user.id}/${record.draverij.id}/${randomUUID()}`
+      stored = photos.map((p, i) => ({ key: `${prefix}-${i + 1}`, mediaType: p.mediaType }))
+      await Promise.all(stored.map((p, i) => putPhoto(req.alias, p.key, photos[i]!.bytes, p.mediaType)))
     }
     const since = nextThinkingSince(record.thinkingSince)
     return {
@@ -107,8 +129,9 @@ async function startUpdate(
       error: undefined,
       step: kind,
       thinkingSince: since,
-      photoKey,
-      photoMediaType: photo?.mediaType,
+      photos: stored,
+      photoKey: undefined,
+      photoMediaType: undefined,
     }
   })
   try {
@@ -120,10 +143,10 @@ async function startUpdate(
     return started
   } catch (err) {
     console.error(err)
-    if (photoKey) await deletePhoto(req.alias, photoKey).catch(console.error)
+    await removePhotos()
     return mutate(req, user, (record) =>
       record.thinkingSince === started.thinkingSince
-        ? { ...record, status: 'error', error: 'De AI kon niet gestart worden. Probeer het opnieuw.', photoKey: undefined }
+        ? { ...record, status: 'error', error: 'De AI kon niet gestart worden. Probeer het opnieuw.', photos: undefined }
         : record,
     )
   }
@@ -243,20 +266,18 @@ export const handler = createHandler({
     return ok(await view(req, await startUpdate(req, user, 'fetch')), 202)
   },
 
+  // Body { images: [{ image, mediaType }, …] }; the older { image, mediaType } is one photo
   'POST /koersdagen/{id}/photo': async (req) => {
     const user = await authenticate(req)
-    const mediaType = req.body.mediaType
-    if (typeof mediaType !== 'string' || !(PHOTO_TYPES as readonly string[]).includes(mediaType)) {
-      throw new HttpError(400, 'Gebruik een foto (JPG, PNG of WebP).')
+    const list = Array.isArray(req.body.images) ? (req.body.images as unknown[]) : [req.body]
+    if (list.length === 0) throw new HttpError(400, 'Maak eerst een foto.')
+    if (list.length > MAX_PHOTOS) throw new HttpError(400, `Stuur maximaal ${MAX_PHOTOS} foto's tegelijk.`)
+    const photos = list.map(readPhoto)
+    const total = photos.reduce((sum, p) => sum + p.size, 0)
+    if (total > MAX_PHOTO_BASE64) {
+      throw new HttpError(413, "De foto's zijn samen te groot. Stuur minder foto's tegelijk.")
     }
-    const image = readString(req.body, 'image', 'Maak eerst een foto.')
-    if (image.length > MAX_PHOTO_BASE64) {
-      throw new HttpError(413, 'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.')
-    }
-    const bytes = new Uint8Array(Buffer.from(image, 'base64'))
-    const actualType = sniffImage(bytes)
-    if (!actualType) throw new HttpError(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
-    return ok(await view(req, await startUpdate(req, user, 'photo', undefined, { bytes, mediaType: actualType })), 202)
+    return ok(await view(req, await startUpdate(req, user, 'photo', undefined, photos)), 202)
   },
 
   'POST /koersdagen/{id}/next': async (req) => {

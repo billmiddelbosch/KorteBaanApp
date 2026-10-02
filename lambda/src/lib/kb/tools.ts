@@ -100,7 +100,7 @@ export const KB_TOOLS: Record<string, CustomTool> = {
 
 const MODE_TOOLS: Record<ToolMode, string[]> = {
   analysis: ['kb_field', 'kb_entity', 'kb_matchups', 'kb_conditions', 'kb_search', 'kb_record_claim'],
-  koersdag: ['kb_field', 'kb_entity', 'kb_matchups', 'kb_record_claim'],
+  koersdag: ['kb_field', 'kb_entity', 'kb_matchups'],
   mcp: ['kb_field', 'kb_entity', 'kb_matchups', 'kb_conditions', 'kb_search', 'kb_record_claim'],
 }
 

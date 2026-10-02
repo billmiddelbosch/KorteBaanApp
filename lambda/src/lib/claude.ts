@@ -266,15 +266,26 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
   let textFrom = 0
   let toolRounds = 0
   let searches = 0
+  const stops: (string | null)[] = []
 
-  // Pause continuations plus tool rounds, plus the round in which Claude hears the budget is spent
+  // Pause continuations plus tool rounds, plus the round in which Claude must answer
   const maxRequests = MAX_CONTINUATIONS + 1 + (maxToolRounds ? maxToolRounds + 1 : 0)
   for (let request = 0; request < maxRequests; request++) {
+    const lastRequest = request === maxRequests - 1
+    // Budget spent or no requests left: no more tools, Claude has to write its answer now
+    const mustAnswer = maxToolRounds > 0 && (toolRounds >= maxToolRounds || lastRequest)
     const web = webTools.map((t) =>
       t === WEB_SEARCH_TOOL ? { ...WEB_SEARCH_TOOL, max_uses: Math.max(1, Math.min(WEB_SEARCH_TOOL.max_uses, searchBudget - searches)) } : t,
     )
     const tools = [...web, ...custom]
-    const body = { model: CHAT_MODEL, max_tokens: MAX_TOKENS, system, messages, ...(tools.length ? { tools } : {}) }
+    const body = {
+      model: CHAT_MODEL,
+      max_tokens: MAX_TOKENS,
+      system,
+      messages,
+      ...(tools.length ? { tools } : {}),
+      ...(mustAnswer ? { tool_choice: { type: 'none' } } : {}),
+    }
     let res = await post(token, body, signal)
     // If a web tool isn't available for this token, drop web fetch first, then all web tools:
     // answering with less is better than not answering
@@ -285,19 +296,21 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
       webTools = /web_fetch/i.test(detail) && withoutFetch.length < webTools.length ? withoutFetch : []
       console.warn(webTools.length ? 'Web fetch rejected, retrying with web search only' : 'Web search rejected, retrying without web tools')
       const retryTools = [...webTools.map((t) => (t === WEB_SEARCH_TOOL ? web[0] : t)), ...custom]
-      const { tools: _t, ...rest } = body
-      res = await post(token, retryTools.length ? { ...rest, tools: retryTools } : rest, signal)
+      const { tools: _t, tool_choice: toolChoice, ...rest } = body
+      res = await post(token, retryTools.length ? { ...rest, tools: retryTools, ...(toolChoice ? { tool_choice: toolChoice } : {}) } : rest, signal)
     }
     if (!res.ok) throw await errorFor(res)
 
     const data = (await res.json()) as MessagesResponse
     content.push(...data.content)
+    stops.push(data.stop_reason)
     searches += data.content.filter((b) => b.type === 'server_tool_use' && (b as { name?: string }).name === 'web_search').length
     if (data.stop_reason === 'pause_turn') {
       messages.push({ role: 'assistant', content: data.content })
       continue
     }
-    if (data.stop_reason !== 'tool_use' || !maxToolRounds) break
+    // On the last request a tool call can no longer be answered: keep what Claude wrote
+    if (data.stop_reason !== 'tool_use' || !maxToolRounds || lastRequest) break
 
     const spent = toolRounds >= maxToolRounds
     toolRounds++
@@ -312,6 +325,7 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
     .map((b) => b.text)
     .join('')
     .trim()
+  console.info(`Claude stop reasons: ${stops.join(', ')} (tool rounds ${toolRounds}/${maxToolRounds}, searches ${searches})`)
   if (!text) throw new ClaudeError('other', 'Claude gaf een leeg antwoord. Probeer het opnieuw.')
   return { text, sources: sourcesOf(content) }
 }

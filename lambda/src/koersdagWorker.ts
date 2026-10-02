@@ -10,6 +10,7 @@ import {
   parseBoard,
   parseKansen,
   parseUpdate,
+  photosOf,
   UNREADABLE_ERROR,
   type KoersdagRecord,
   type KoersdagUpdate,
@@ -42,6 +43,7 @@ async function save(alias: Alias, job: WorkerJob, outcome: Outcome) {
     if (!latest || latest.status !== 'thinking' || latest.thinkingSince !== job.thinkingSince) return
     const next: KoersdagRecord = {
       ...latest,
+      photos: undefined,
       photoKey: undefined,
       photoMediaType: undefined,
       updatedAt: new Date(Math.max(Date.now(), Date.parse(latest.updatedAt) + 1)).toISOString(),
@@ -84,8 +86,10 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
   const kbTools = dossier ? await kb.workerTools(alias, record.draverij, 'koersdag', today) : null
   const images: ChatImage[] = []
   if (kind === 'photo') {
-    if (!record.photoKey) return { error: 'De foto is niet aangekomen. Maak de foto opnieuw.' }
-    images.push({ mediaType: (record.photoMediaType ?? 'image/jpeg') as ChatImage['mediaType'], data: await readPhoto(alias, record.photoKey) })
+    const photos = photosOf(record)
+    if (!photos.length) return { error: 'De foto is niet aangekomen. Maak de foto opnieuw.' }
+    const data = await Promise.all(photos.map((p) => readPhoto(alias, p.key)))
+    photos.forEach((p, i) => images.push({ mediaType: p.mediaType as ChatImage['mediaType'], data: data[i]! }))
   }
 
   const { system, text } = buildKoersdagPrompt({
@@ -97,6 +101,7 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
     board,
     zeturf,
     kennisbank: dossier,
+    photoCount: images.length,
   })
   const reply = await askClaude(token, {
     system,
@@ -159,6 +164,6 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
     }
   }
 
-  if (record.photoKey) await deletePhoto(alias, record.photoKey).catch(console.error)
+  await Promise.all(photosOf(record).map((p) => deletePhoto(alias, p.key).catch(console.error)))
   await save(alias, job, outcome).catch(console.error)
 }

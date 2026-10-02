@@ -9,6 +9,9 @@ import type { Koersdag, KoersdagToday } from '@/types/koersdag'
 
 const POLL_MS = 2000
 
+// Photos of the board per check; matches the API limit
+export const MAX_BOARD_PHOTOS = 3
+
 export type StartInput = { budget: number } & ({ draverijId: string } | { place: string })
 
 // Today's koersdag. Global, so the Live bar in the shell stays in step on every page
@@ -80,7 +83,9 @@ export const useKoersdagStore = defineStore('koersdag', () => {
   async function post(path: string, body?: object) {
     const id = current.value?.id
     if (!id) return
-    setCurrent((await api.post<Koersdag>(`/koersdagen/${encodeURIComponent(id)}${path}`, body)).data)
+    setCurrent(
+      (await api.post<Koersdag>(`/koersdagen/${encodeURIComponent(id)}${path}`, body)).data,
+    )
   }
 
   async function start(input: StartInput) {
@@ -90,7 +95,8 @@ export const useKoersdagStore = defineStore('koersdag', () => {
   const refresh = () => post('/refresh')
   const nextOmloop = () => post('/next')
   const finish = () => post('/finish')
-  const sendPhoto = (photo: CompressedPhoto) => post('/photo', photo)
+  // Several photos together form one board (it does not always fit in one photo)
+  const sendPhotos = (photos: CompressedPhoto[]) => post('/photo', { images: photos })
   const addBet = (bet: { bet: string; amount: number; suggestionId?: string }) => post('/bets', bet)
 
   async function updateBet(betId: string, change: { amount?: number; winnings?: number | null }) {
@@ -144,7 +150,7 @@ export const useKoersdagStore = defineStore('koersdag', () => {
     refresh,
     nextOmloop,
     finish,
-    sendPhoto,
+    sendPhotos,
     addBet,
     updateBet,
     removeBet,
