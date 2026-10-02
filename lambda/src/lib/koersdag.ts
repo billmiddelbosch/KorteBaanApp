@@ -25,6 +25,28 @@ export interface Suggestion {
   reasoning: string
   // New or different compared to the previous advice
   changed: boolean
+  // Chance (0–1) that this bet pays out, as estimated by the AI. Absent on older updates
+  chance?: number | null
+  // Quota from the board for exactly this bet (decimal, stake included), when known
+  odds?: number | null
+  // Computed by the app: expected return per euro staked (chance × odds − 1); null without odds
+  expectedValue?: number | null
+  // Computed by the app: the lowest quota at which the bet breaks even (1 / chance)
+  minOdds?: number | null
+}
+
+// Advise only when chance × quota is at least this: a margin for moving quota and a rough chance
+export const MIN_VALUE_FACTOR = 1.1
+
+// Expected return per euro staked: 0.2 = on average 20 cent profit per euro
+export function expectedValue(chance: number | null, odds: number | null): number | null {
+  if (chance === null || odds === null) return null
+  return Math.round((chance * odds - 1) * 100) / 100
+}
+
+// Break-even quota: below this the bet loses money on average
+export function minOddsFor(chance: number | null): number | null {
+  return chance === null ? null : Math.round((1 / chance) * 100) / 100
 }
 
 export interface PhotoCheck {
@@ -201,7 +223,10 @@ function describeProposal(p: AdviceProposal): string {
 function describeUpdate(u: KoersdagUpdate): string {
   const advice = u.advice.length
     ? u.advice
-        .map((s) => `- ${[s.race, s.bet].filter(Boolean).join(' — ')}${s.amount !== null ? ` (${euro(s.amount)})` : ''}`)
+        .map(
+          (s) =>
+            `- ${[s.race, s.bet].filter(Boolean).join(' — ')}${s.amount !== null ? ` (${euro(s.amount)})` : ''}${s.chance != null ? `, kans ${Math.round(s.chance * 100)}%` : ''}${s.odds != null ? `, quota ${s.odds}` : ''}`,
+        )
         .join('\n')
     : '- niet (extra) inzetten'
   return `${omloopLabel(u.omloop)} (${u.kind === 'photo' ? 'foto' : 'online'}):
@@ -244,6 +269,7 @@ export function buildKoersdagPrompt(input: {
 Vandaag is het ${formatDutchDate(input.today)}. De gebruiker is op de kortebaandraverij in ${record.draverij.place} en gebruikt de app tijdens de koersdag, op de telefoon. Dit is geen gesprek: je geeft per omloop één overzicht dat de app als kaart toont.
 
 Budget: ${euro(record.budget)}. Ingezet: ${euro(staked)}. Uitbetaald: ${euro(paidOut)}. Nog over: ${euro(remaining)}.
+Het budget is een richtlijn van de gebruiker, geen harde grens: jij adviseert, de gebruiker beslist wat er met het advies gebeurt.
 
 Vastgelegd advies van vóór de koersdag:
 ${advice ? describeProposal(advice.proposal) : 'Er is geen vastgelegd advies. Maak bij de eerste omloop een eerste advies op basis van het budget en de actuele informatie.'}
@@ -256,10 +282,13 @@ ${board.length ? `Afgelezen van bordfoto's die bezoekers vandaag maakten (nieuws
 
 ## Vorm van je antwoord
 Antwoord met precies één blok in deze vorm (geldige JSON, bedragen in euro's of null) en verder niets:
-<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "bord": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "onderbouwing": "…", "nieuw": false}]}, "kansen": [{"koppel": 1, "links": "…", "rechts": "…", "winkans_links": 0.55, "quota_links": 2.4, "quota_rechts": 3.1}], "finale": false}</koersdag>
+<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "bord": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "kans": 0.45, "quota": 3.1, "onderbouwing": "…", "nieuw": false}]}, "kansen": [{"koppel": 1, "links": "…", "rechts": "…", "winkans_links": 0.55, "quota_links": 2.4, "quota_rechts": 3.1}], "finale": false}</koersdag>
 
 - "oordeel" is "blijft" als het vorige advies (of het vastgelegde advies) nog klopt, anders "aangepast"; zet bij "aangepast" in "wijzigingen" kort wat er veranderde en waarom.
-- "advies" gaat over wat er nú (extra) ingezet moet worden, binnen wat er nog over is van het budget. Is het beter om niet (extra) in te zetten, geef dan een lege lijst "keuzes" en leg het uit in "toelichting".
+- "advies" gaat over wat er nú (extra) ingezet moet worden. Richt je op wat er nog over is van het budget, maar houd het advies open: is het budget (bijna) op of is een kans meer inzet waard, geef die keuze dan toch, met het bedrag dat je passend vindt, en zeg in de "onderbouwing" dat het buiten het budget valt. Is het beter om niet (extra) in te zetten, geef dan een lege lijst "keuzes" en leg het uit in "toelichting"; dat het budget op is, is daarvoor alleen geen reden.
+- Geef bij elke keuze "kans": jouw inschatting (0–1) dat precies deze inzet uitbetaalt, en "quota": de quota van het bord voor deze inzet (winnend of plaats), of null als je die niet kent. De kans past bij je "kansen" per koppel en bij alle koppels die het paard nog moet winnen. De app rekent zelf de verwachte waarde uit (kans × quota − 1 per euro) en, zonder quota, de minimale quota (1 / kans).
+- Adviseer alleen inzetten met een duidelijk positieve verwachte waarde: kans × quota minstens ${String(MIN_VALUE_FACTOR).replace('.', ',')}. De quota schuiven nog tot de inzet sluit en jouw kans is een schatting; daarom die marge. Een sterke favoriet met een lage quota is dus vaak géén goede inzet. Is de quota onbekend, geef de keuze alleen als de minimale quota realistisch is en noem in de "onderbouwing" vanaf welke quota het de moeite waard is.
+- Zie je in een volgende omloop een grote kans (een paard dat je duidelijk hoger inschat dan de quota doet vermoeden), noem die dan in "toelichting", ook als het budget daarvoor niet meer toereikend is. De gebruiker kiest zelf wat te doen.
 - Zet "nieuw" op true bij een keuze die nieuw is of anders dan in het vorige advies.
 - "kansen": per koppel van de ${omloop} jouw inschatting dat het linker paard wint (0–1), met de winnend-quota van het bord als je die kent (anders null). Alleen als de loting bekend is, anders een lege lijst. De app legt ze vast en vergelijkt ze na afloop met de uitslag.
 - Zet "finale" op true als ${omloop} de finale is (daarna is de koersdag voorbij).
@@ -328,6 +357,7 @@ export interface KoppelKans {
 }
 
 const quota = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 1 && v < 1000 ? v : null)
+const probability = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 1 ? v : null)
 
 // Win chances per koppel from a <koersdag> reply, for scoring afterwards
 export function parseKansen(raw: string, omloop: number): KoppelKans[] {
@@ -377,6 +407,8 @@ export function parseUpdate(
       const pick = p as Record<string, unknown>
       const bet = str(pick.inzet, MAX_BET_LENGTH)
       if (!bet) return null
+      const chance = probability(pick.kans)
+      const odds = quota(pick.quota)
       return {
         id: meta.newId(),
         race: str(pick.koers, 120),
@@ -384,6 +416,10 @@ export function parseUpdate(
         amount: amount(pick.bedrag),
         reasoning: str(pick.onderbouwing, 600),
         changed: pick.nieuw === true,
+        chance,
+        odds,
+        expectedValue: expectedValue(chance, odds),
+        minOdds: minOddsFor(chance),
       }
     })
     .filter((s): s is Suggestion => s !== null)

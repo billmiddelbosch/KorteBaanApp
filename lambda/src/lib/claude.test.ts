@@ -23,7 +23,10 @@ const toolUse = (id: string) => ({ type: 'tool_use', id, name: 'kb_field', input
 const tool = { name: 'kb_field', description: 'x', input_schema: { type: 'object' } }
 const ask = { system: 's', turns: [{ role: 'user' as const, text: 'Advies?' }], timeoutMs: 5000, tools: [tool] }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 describe('askClaude with own tools', () => {
   it('runs tool rounds and answers with the text after the last one', async () => {
@@ -102,5 +105,22 @@ describe('askClaude with own tools', () => {
     const reply = await askClaude('token', { ...ask, runTool: async () => '### Fleur', maxToolRounds: 1 })
     expect(bodies).toHaveLength(6)
     expect(reply.text).toBe('Stap 5.')
+  })
+})
+
+describe('askClaude without text in the reply', () => {
+  it('says the answer got too long when the output limit is reached without text', async () => {
+    const bodies = stubApi([{ content: [{ type: 'thinking', thinking: '…' }], stop_reason: 'max_tokens' }])
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(askClaude('token', { ...ask, maxTokens: 16_000 })).rejects.toThrow('Het antwoord werd te lang')
+    expect((bodies[0] as Body & { max_tokens: number }).max_tokens).toBe(16_000)
+    expect(error).toHaveBeenCalledWith('Claude reply without text; blocks: thinking')
+  })
+
+  it('keeps the general message for other empty replies', async () => {
+    const bodies = stubApi([{ content: [], stop_reason: 'end_turn' }])
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(askClaude('token', ask)).rejects.toThrow('Claude gaf een leeg antwoord')
+    expect((bodies[0] as Body & { max_tokens: number }).max_tokens).toBe(4096)
   })
 })

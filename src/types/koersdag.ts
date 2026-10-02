@@ -13,6 +13,14 @@ export interface Suggestion {
   reasoning: string
   // New or different compared to the previous advice
   changed: boolean
+  // AI's chance (0–1) that the bet pays out; absent on older updates
+  chance?: number | null
+  // Board quota for this bet, when known
+  odds?: number | null
+  // Expected return per euro (chance × odds − 1); null without odds
+  expectedValue?: number | null
+  // Break-even quota (1 / chance)
+  minOdds?: number | null
 }
 
 export interface PhotoCheck {
