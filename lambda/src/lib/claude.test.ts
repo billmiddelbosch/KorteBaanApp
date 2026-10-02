@@ -4,6 +4,7 @@ import { askClaude, TOOL_BUDGET_SPENT } from './claude'
 interface Body {
   messages: { role: string; content: unknown }[]
   tools?: { name?: string; type?: string; max_uses?: number }[]
+  tool_choice?: { type: string }
 }
 
 function stubApi(replies: { content: unknown[]; stop_reason: string }[]) {
@@ -59,5 +60,47 @@ describe('askClaude with own tools', () => {
     expect(bodies[2]!.messages.at(-1)!.content).toEqual([
       { type: 'tool_result', tool_use_id: 't2', content: TOOL_BUDGET_SPENT, is_error: true },
     ])
+  })
+
+  it('forces an answer without tools once the tool budget is spent', async () => {
+    const bodies = stubApi([
+      { content: [toolUse('t1')], stop_reason: 'tool_use' },
+      { content: [{ type: 'text', text: 'Fleur wint.' }], stop_reason: 'end_turn' },
+    ])
+    const reply = await askClaude('token', { ...ask, runTool: async () => '### Fleur', maxToolRounds: 1 })
+    expect(reply.text).toBe('Fleur wint.')
+    expect(bodies[0]!.tool_choice).toBeUndefined()
+    expect(bodies[1]!.tool_choice).toEqual({ type: 'none' })
+  })
+
+  it('forces an answer on the last request when searches paused the turn', async () => {
+    const pause = { content: [{ type: 'server_tool_use', id: 's', name: 'web_search', input: {} }], stop_reason: 'pause_turn' }
+    // 3 continuations + 1 + (1 tool round + 1): the 6th request is the last
+    const bodies = stubApi([
+      pause,
+      pause,
+      pause,
+      pause,
+      pause,
+      { content: [{ type: 'text', text: 'Fleur wint.' }], stop_reason: 'end_turn' },
+    ])
+    const reply = await askClaude('token', { ...ask, runTool: async () => '### Fleur', maxToolRounds: 1 })
+    expect(reply.text).toBe('Fleur wint.')
+    expect(bodies).toHaveLength(6)
+    expect(bodies[4]!.tool_choice).toBeUndefined()
+    expect(bodies[5]!.tool_choice).toEqual({ type: 'none' })
+  })
+
+  it('never ends on unanswered tool results', async () => {
+    // Claude keeps calling tools; the last reply is kept instead of sending results nobody reads
+    const bodies = stubApi(
+      Array.from({ length: 6 }, (_, i) => ({
+        content: [{ type: 'text', text: `Stap ${i}.` }, toolUse(`t${i}`)],
+        stop_reason: 'tool_use',
+      })),
+    )
+    const reply = await askClaude('token', { ...ask, runTool: async () => '### Fleur', maxToolRounds: 1 })
+    expect(bodies).toHaveLength(6)
+    expect(reply.text).toBe('Stap 5.')
   })
 })

@@ -56,6 +56,7 @@ test.describe('Koersdag', () => {
       mimeType: 'image/png',
       buffer: PHOTO,
     })
+    await page.getByRole('button', { name: 'Controleer bord' }).click()
     await expect(page.getByText('Advies aangepast')).toBeVisible(AI_TIMEOUT)
     await expect(page.getByText('Verschillen met het bord')).toBeVisible()
     await expect(page.getByText('Quota Fleur de Lis 3,2 → 4,1')).toBeVisible()
@@ -108,9 +109,9 @@ test.describe('Koersdag', () => {
     await page.getByLabel('Budget voor vandaag').fill('25')
     await page.getByRole('button', { name: 'Koersdag starten' }).click()
 
-    await expect(page.getByText('De AI kon online niets actueels vinden', { exact: false })).toBeVisible(
-      AI_TIMEOUT,
-    )
+    await expect(
+      page.getByText('De AI kon online niets actueels vinden', { exact: false }),
+    ).toBeVisible(AI_TIMEOUT)
     await expect(page.getByRole('button', { name: 'Opnieuw proberen' })).toBeVisible()
 
     // A photo of the board still works
@@ -119,6 +120,51 @@ test.describe('Koersdag', () => {
       mimeType: 'image/png',
       buffer: PHOTO,
     })
+    await page.getByRole('button', { name: 'Controleer bord' }).click()
     await expect(page.getByText('Advies aangepast')).toBeVisible(AI_TIMEOUT)
+  })
+
+  test('checks several photos of the board together', async ({ page, loginAs }) => {
+    await loginAs('user')
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Koersdag starten' }).click()
+    await expect(page.getByText('Advies blijft staan')).toBeVisible(AI_TIMEOUT)
+
+    // A photo waits until the board is complete
+    const photo = { name: 'bord.png', mimeType: 'image/png', buffer: PHOTO }
+    await page.getByTestId('photo-input').setInputFiles(photo)
+    const tray = page.getByTestId('pending-photos')
+    await expect(tray.getByRole('img')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: 'Controleer bord' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Volgende omloop' })).toBeHidden()
+
+    // Up to three photos; then adding more is no longer offered
+    await page.getByTestId('photo-input').setInputFiles(photo)
+    await page.getByTestId('photo-input').setInputFiles(photo)
+    await expect(tray.getByRole('img')).toHaveCount(3)
+    await expect(page.getByRole('button', { name: 'Nog een foto' })).toBeHidden()
+
+    // Remove one, add none and check the two together
+    await page.getByRole('button', { name: 'Foto 3 verwijderen' }).click()
+    await expect(tray.getByRole('img')).toHaveCount(2)
+    await expect(page.getByRole('button', { name: 'Nog een foto' })).toBeVisible()
+    await page.getByRole('button', { name: "Controleer bord (2 foto's)" }).click()
+    await expect(page.getByText('Advies aangepast')).toBeVisible(AI_TIMEOUT)
+    await expect(tray).toBeHidden()
+    await expect(page.getByRole('button', { name: 'Volgende omloop' })).toBeVisible()
+  })
+
+  test('removing the only photo goes back to the normal actions', async ({ page, loginAs }) => {
+    await loginAs('user')
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Koersdag starten' }).click()
+    await expect(page.getByText('Advies blijft staan')).toBeVisible(AI_TIMEOUT)
+
+    await page
+      .getByTestId('photo-input')
+      .setInputFiles({ name: 'bord.png', mimeType: 'image/png', buffer: PHOTO })
+    await page.getByRole('button', { name: 'Foto 1 verwijderen' }).click()
+    await expect(page.getByTestId('pending-photos')).toBeHidden()
+    await expect(page.getByRole('button', { name: 'Volgende omloop' })).toBeVisible()
   })
 })

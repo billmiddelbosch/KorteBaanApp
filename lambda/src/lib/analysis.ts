@@ -151,12 +151,24 @@ export const kickoffText = (d: Draverij) =>
 
 // The kennisbank as a source in the system prompt. undefined: no kennisbank configured (tests,
 // local runs); null: configured but unreachable, which the reasoning has to mention.
-export function kennisbankSection(kennisbank: string | null | undefined, withTools: boolean): string {
+// The koersdag gets few tool rounds, so it is asked to batch its kennisbank calls.
+export function kennisbankSection(kennisbank: string | null | undefined, tools: 'analysis' | 'koersdag' | false): string {
   if (kennisbank === undefined) return ''
   if (kennisbank === null) {
     return `
 ## Kennisbank
 De kennisbank is nu niet bereikbaar. Baseer je op actuele online bronnen en vermeld in je onderbouwing dat historische kennisbankdata ontbrak.
+`
+  }
+  if (tools === 'koersdag') {
+    return `
+${kennisbank}
+
+## Werken met de kennisbank
+- De kennisbank is één bron naast wat je vandaag ziet (ZEturf, bordfoto's, nieuws). Maak in je onderbouwing zichtbaar wat uit de kennisbank komt en wat van vandaag, en benoem waar ze verschillen.
+- Een les met "[les …]" is een eerdere interpretatie, geen wet; weeg de zekerheid mee.
+- Het dossier hierboven is meestal genoeg. Gebruik de kb_-tools alleen voor paarden of koppels die er niet in staan, en pas als je de loting kent.
+- Roep alles wat je nodig hebt in één beurt tegelijk aan: kb_matchups met alle koppels van deze omloop in één aanroep, kb_field met alle onbekende paarden in één aanroep. Je krijgt maar weinig rondes tools; daarna moet je meteen antwoorden.
 `
   }
   return `
@@ -166,7 +178,7 @@ ${kennisbank}
 - De kennisbank is één bron naast je eigen actuele zoektocht; zoek altijd online naar het nieuws van vandaag (afmeldingen, loting, baanstaat, vorm), ook als de kennisbank compleet lijkt.
 - Maak in je onderbouwing zichtbaar wat uit de kennisbank komt en wat van vandaag, en benoem waar ze verschillen.
 - Een les met "[les …]" is een eerdere interpretatie, geen wet; weeg de zekerheid mee.${
-    withTools
+    tools
       ? `
 - Met de kb_-tools haal je profielen van paarden en pikeurs, onderlinge duels en eerdere edities op. Gebruik ze zodra je de deelnemers of koppels kent.
 - Nieuwe, controleerbare feiten die je online vindt (blessure, afmelding, pikeurwissel, vorm) leg je vast met kb_record_claim, met de bron-URL.`
@@ -188,7 +200,7 @@ export function buildSystemPrompt(input: {
 
 ## Context van de app
 Vandaag is het ${formatDutchDate(input.today)}. De gebruiker wil een inzetadvies voor de kortebaandraverij in ${draverij.place} op ${formatDutchDate(draverij.date)}.
-${kennisbankSection(input.kennisbank, true)}
+${kennisbankSection(input.kennisbank, 'analysis')}
 ## Vorm van je antwoorden
 Als je een inzetadvies voorstelt, sluit je bericht af met precies één blok in deze vorm (geldige JSON, bedragen in euro's of null):
 <advies>{"samenvatting": "…", "budget": 50, "keuzes": [{"koers": "1e omloop, koppel 3", "inzet": "Winnaar: …", "bedrag": 10, "onderbouwing": "…"}]}</advies>
