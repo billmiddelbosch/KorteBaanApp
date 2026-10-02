@@ -51,8 +51,37 @@ describe('parseUpdate', () => {
       adviceNote: 'Houd vast aan Fleur.',
     })
     expect(update?.advice).toEqual([
-      { id: expect.stringMatching(/^s-/), race: '2e omloop', bet: 'Winnaar: Fleur', amount: 10, reasoning: 'Vorm', changed: false },
+      {
+        id: expect.stringMatching(/^s-/),
+        race: '2e omloop',
+        bet: 'Winnaar: Fleur',
+        amount: 10,
+        reasoning: 'Vorm',
+        changed: false,
+        chance: null,
+        odds: null,
+        expectedValue: null,
+        minOdds: null,
+      },
     ])
+  })
+
+  it('computes expected value and break-even quota from the chance and the board quota', () => {
+    const update = parseUpdate(
+      reply({
+        advies: {
+          keuzes: [
+            { inzet: 'Winnaar: Fleur', kans: 0.4, quota: 3.2 },
+            { inzet: 'Winnaar: Jan', kans: 0.5 },
+            { inzet: 'Plaats: Piet', kans: 1.5, quota: 0.8 },
+          ],
+        },
+      }),
+      meta(),
+    )
+    expect(update?.advice[0]).toMatchObject({ chance: 0.4, odds: 3.2, expectedValue: 0.28, minOdds: 2.5 })
+    expect(update?.advice[1]).toMatchObject({ chance: 0.5, odds: null, expectedValue: null, minOdds: 2 })
+    expect(update?.advice[2]).toMatchObject({ chance: null, odds: null, expectedValue: null, minOdds: null })
   })
 
   it('marks a changed advice and keeps the changes', () => {
@@ -187,6 +216,21 @@ describe('koersdag prompt', () => {
     expect(shared).toContain('- 3 Fleur de Lis: winnend 3,2')
     expect(shared).toContain('(foto van deze gebruiker)')
     expect(prompt('fetch').system).toContain('verzin ze niet')
+  })
+
+  it('treats the budget as a guideline and asks to flag big chances in later omlopen', () => {
+    const { system } = prompt('fetch')
+    expect(system).toContain('geen harde grens')
+    expect(system).toContain('buiten het budget valt')
+    expect(system).toContain('volgende omloop een grote kans')
+    expect(system).not.toContain('binnen wat er nog over is van het budget')
+  })
+
+  it('asks for chance and quota per pick and only advises bets with clear value', () => {
+    const { system } = prompt('fetch')
+    expect(system).toContain('"kans": 0.45, "quota": 3.1')
+    expect(system).toContain('kans × quota minstens 1,1')
+    expect(system).toContain('vanaf welke quota')
   })
 
   it('puts the kennisbank before the quotabord and asks for win chances per koppel', () => {

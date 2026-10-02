@@ -407,13 +407,26 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
     changes: [],
     isFinal: false,
   }
-  const pick = (race: string, bet: string, amount: number, reasoning: string, changed = false) => ({
+  // Like parseUpdate: the app computes expected value and break-even quota from chance and quota
+  const pick = (
+    race: string,
+    bet: string,
+    amount: number,
+    reasoning: string,
+    changed = false,
+    chance: number | null = null,
+    odds: number | null = null,
+  ) => ({
     id: nextId('s'),
     race,
     bet,
     amount,
     reasoning,
     changed,
+    chance,
+    odds,
+    expectedValue: chance !== null && odds !== null ? Math.round((chance * odds - 1) * 100) / 100 : null,
+    minOdds: chance !== null ? Math.round((1 / chance) * 100) / 100 : null,
   })
 
   if (kind === 'photo') {
@@ -425,7 +438,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       photoCheck: { matches: false, differences: ['Quota Fleur de Lis 3,2 → 4,1'] },
       adviceNote: 'Zet minder in op Fleur de Lis; de rest blijft staan.',
       advice: [
-        pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 10, 'Nog steeds de sterkste.', true),
+        pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 10, 'Nog steeds de sterkste.', true, 0.35, 4.1),
       ],
     }
   }
@@ -435,7 +448,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       findings: ['De finale is bekend: Ilse van de Heide tegen Hessel B.'],
       verdict: 'kept',
       adviceNote: 'Dit is de finale: de gok op Ilse van de Heide blijft staan.',
-      advice: [pick('Finale', 'Winnaar: Ilse van de Heide', 10, 'Buitenkans met hoge quote.')],
+      advice: [pick('Finale', 'Winnaar: Ilse van de Heide', 10, 'Buitenkans met hoge quote.', false, 0.25, 6)],
       isFinal: true,
     }
   }
@@ -446,7 +459,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       verdict: 'changed',
       changes: ['Nieuw: Hessel B, want zijn sterkste tegenstander is afgemeld.'],
       adviceNote: 'Een kleine extra inzet op Hessel B.',
-      advice: [pick(`${label}, koppel 1`, 'Winnaar: Hessel B', 5, 'Tegenstander afgemeld.', true)],
+      advice: [pick(`${label}, koppel 1`, 'Winnaar: Hessel B', 5, 'Tegenstander afgemeld.', true, 0.6)],
     }
   }
   const hadAdvice =
@@ -459,7 +472,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       ? 'Het vastgelegde advies klopt nog: zet in op Fleur de Lis.'
       : `Eerste advies binnen je budget van ${euro(koersdag.budget)}.`,
     advice: [
-      pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 20, 'Won twee van de laatste drie.'),
+      pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 20, 'Won twee van de laatste drie.', false, 0.4, 3.2),
     ],
   }
 }
