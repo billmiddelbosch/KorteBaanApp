@@ -102,6 +102,7 @@ interface ContentBlock {
 interface MessagesResponse {
   content: ContentBlock[]
   stop_reason: string | null
+  usage?: { input_tokens?: number; output_tokens?: number }
 }
 
 type ApiMessage = { role: 'user' | 'assistant'; content: string | ContentBlock[] }
@@ -220,6 +221,8 @@ export interface AskInput {
   maxToolRounds?: number
   // Web searches over the whole turn (default: 5 per request)
   searchBudget?: number
+  // Output limit per request (default 4096); long answers such as a read-out board need more
+  maxTokens?: number
 }
 
 const isWebTool = (t: unknown) => (t as { type?: string }).type?.startsWith('web_') ?? false
@@ -267,6 +270,7 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
   let toolRounds = 0
   let searches = 0
   const stops: (string | null)[] = []
+  let outputTokens = 0
 
   // Pause continuations plus tool rounds, plus the round in which Claude must answer
   const maxRequests = MAX_CONTINUATIONS + 1 + (maxToolRounds ? maxToolRounds + 1 : 0)
@@ -280,7 +284,7 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
     const tools = [...web, ...custom]
     const body = {
       model: CHAT_MODEL,
-      max_tokens: MAX_TOKENS,
+      max_tokens: input.maxTokens ?? MAX_TOKENS,
       system,
       messages,
       ...(tools.length ? { tools } : {}),
@@ -304,6 +308,7 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
     const data = (await res.json()) as MessagesResponse
     content.push(...data.content)
     stops.push(data.stop_reason)
+    outputTokens += data.usage?.output_tokens ?? 0
     searches += data.content.filter((b) => b.type === 'server_tool_use' && (b as { name?: string }).name === 'web_search').length
     if (data.stop_reason === 'pause_turn') {
       messages.push({ role: 'assistant', content: data.content })
@@ -325,7 +330,15 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
     .map((b) => b.text)
     .join('')
     .trim()
-  console.info(`Claude stop reasons: ${stops.join(', ')} (tool rounds ${toolRounds}/${maxToolRounds}, searches ${searches})`)
-  if (!text) throw new ClaudeError('other', 'Claude gaf een leeg antwoord. Probeer het opnieuw.')
+  console.info(`Claude stop reasons: ${stops.join(', ')} (tool rounds ${toolRounds}/${maxToolRounds}, searches ${searches}, output tokens ${outputTokens})`)
+  if (!text) {
+    // Nothing to show: log what came instead of text, to find out why
+    const blocks = content.slice(textFrom).map((b) => b.type)
+    console.error(`Claude reply without text; blocks: ${blocks.join(', ') || 'none'}`)
+    if (stops.at(-1) === 'max_tokens') {
+      throw new ClaudeError('other', "Het antwoord werd te lang. Probeer het opnieuw, eventueel met minder foto's.")
+    }
+    throw new ClaudeError('other', 'Claude gaf een leeg antwoord. Probeer het opnieuw.')
+  }
   return { text, sources: sourcesOf(content) }
 }
