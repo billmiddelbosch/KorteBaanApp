@@ -132,13 +132,23 @@ async function confirmRestart() {
 }
 
 // ── Scroll to the newest message ──
-const bottom = ref<HTMLElement | null>(null)
+// Scroll the page to its very end: only there does the sticky composer sit below the last
+// message instead of on top of it (and the phone bottom bar over the page's bottom padding)
 function scrollToBottom(smooth: boolean) {
   const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  bottom.value?.scrollIntoView({ block: 'end', behavior: smooth && !reduce ? 'smooth' : 'auto' })
+  window.scrollTo({
+    top: document.documentElement.scrollHeight,
+    behavior: smooth && !reduce ? 'smooth' : 'auto',
+  })
 }
 watch(
-  () => [chat.value?.messages.length, chat.value?.status],
+  () => [
+    chat.value?.messages.length,
+    chat.value?.status,
+    sendError.value,
+    retryError.value,
+    lockError.value,
+  ],
   async (_, before) => {
     await nextTick()
     scrollToBottom(before?.[0] !== undefined)
@@ -283,7 +293,6 @@ onMounted(load)
           <AlertBox v-if="lockError" class="w-full">{{ lockError }}</AlertBox>
         </li>
       </ol>
-      <div ref="bottom"></div>
 
       <!-- Composer -->
       <form

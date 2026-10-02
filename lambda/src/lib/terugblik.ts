@@ -121,8 +121,12 @@ export function buildEvaluationPrompt(input: {
   record: KoersdagRecord
   advice: LockedAdvice | undefined
   results: OmloopResult[]
+  // Kennisbank: how the day's win chances scored, and lessons to test against this day
+  scorecard?: string | null
+  lessonsToCheck?: string[]
 }): { system: string; text: string } {
   const { record } = input
+  const checks = input.lessonsToCheck ?? []
   const { staked, paidOut } = totals(record)
   const system = `${input.instruction.trim()}
 
@@ -136,13 +140,20 @@ ${describeBets(record.bets)}
 
 Bevestigde uitslagen:
 ${describeResults(input.results)}
-
+${input.scorecard ? `
+## Voorspellingen tegen de uitslag (kennisbank)
+${input.scorecard}
+` : ''}${checks.length ? `
+## Te toetsen lessen
+Deze lessen uit eerdere evaluaties gaan over deze kortebaan. Toets ze aan wat er vandaag gebeurde.
+${checks.map((l) => `- ${l}`).join('\n')}
+` : ''}
 ## Vorm van je antwoord
 Antwoord met precies één blok in deze vorm (geldige JSON) en verder niets:
-<evaluatie>{"oordeel": "Eén of twee zinnen over de hele dag.", "omlopen": [{"omloop": 1, "klopte": true, "advies": "Winnaar: …", "winnaar": "…", "waarom": "Eén zin waarom het wel of niet uitkwam."}], "lessen": ["…"]}</evaluatie>
+<evaluatie>{"oordeel": "Eén of twee zinnen over de hele dag.", "omlopen": [{"omloop": 1, "klopte": true, "advies": "Winnaar: …", "winnaar": "…", "waarom": "Eén zin waarom het wel of niet uitkwam."}], "lessen": [{"tekst": "…", "paarden": [], "pikeurs": [], "baan": null}]${checks.length ? ', "lescontrole": [{"id": "…", "oordeel": "bevestigd"}]' : ''}}</evaluatie>
 
 - Eén regel per omloop uit de uitslagen. "klopte" is true of false; null als er voor die omloop geen advies was.
-- "lessen": hooguit ${MAX_LESSONS_PER_EVALUATION} algemene, herbruikbare lessen voor toekomstige adviezen (over paarden, pikeurs, banen, omstandigheden of de manier van adviseren), met plaats en datum waar dat helpt. Geen lessen die alleen voor deze dag gelden. Een lege lijst mag.
+- "lessen": hooguit ${MAX_LESSONS_PER_EVALUATION} algemene, herbruikbare lessen voor toekomstige adviezen (over paarden, pikeurs, banen, omstandigheden of de manier van adviseren), met plaats en datum waar dat helpt. Geen lessen die alleen voor deze dag gelden en geen statistiek die de kennisbank zelf kan uitrekenen. Noem in "paarden", "pikeurs" en "baan" over wie of wat de les gaat. Een lege lijst mag.${checks.length ? '\n- "lescontrole": alleen voor te toetsen lessen waar vandaag iets over te zeggen valt: "bevestigd" als de dag de les steunt, "weerlegd" als hij hem tegenspreekt. Laat de rest weg.' : ''}
 - Schrijf kort en concreet in het Nederlands.`
 
   return { system, text: 'Evalueer het advies van deze koersdag tegen de uitslagen.' }
@@ -193,10 +204,39 @@ export function parseResults(raw: string): OmloopResult[] | null {
   )
 }
 
+export interface ParsedLesson {
+  tekst: string
+  paarden: string[]
+  pikeurs: string[]
+  baan?: string
+}
+
+export interface LessonCheck {
+  id: string
+  oordeel: 'bevestigd' | 'weerlegd'
+}
+
+const names = (v: unknown) =>
+  (Array.isArray(v) ? v : [])
+    .map((n) => str(n, 80))
+    .filter(Boolean)
+    .slice(0, 10)
+
+// A lesson is a string (older prompt) or {tekst, paarden, pikeurs, baan}
+function parseLesson(v: unknown): ParsedLesson | null {
+  if (typeof v === 'string') return str(v, 400) ? { tekst: str(v, 400), paarden: [], pikeurs: [] } : null
+  if (!v || typeof v !== 'object') return null
+  const l = v as Record<string, unknown>
+  const tekst = str(l.tekst, 400)
+  if (!tekst) return null
+  const baan = str(l.baan, 60)
+  return { tekst, paarden: names(l.paarden), pikeurs: names(l.pikeurs), ...(baan ? { baan } : {}) }
+}
+
 export function parseEvaluation(
   raw: string,
   createdAt: string,
-): { evaluation: Evaluation; lessons: string[] } | null {
+): { evaluation: Evaluation; lessons: ParsedLesson[]; checks: LessonCheck[] } | null {
   const v = parseBlock(raw, 'evaluatie')
   if (!v || !Array.isArray(v.omlopen)) return null
   const omlopen = byOmloop(
@@ -219,10 +259,18 @@ export function parseEvaluation(
   const summary = str(v.oordeel, 800)
   if (!summary && !omlopen.length) return null
   const lessons = (Array.isArray(v.lessen) ? v.lessen : [])
-    .map((l) => str(l, 400))
-    .filter(Boolean)
+    .map(parseLesson)
+    .filter((l): l is ParsedLesson => l !== null)
     .slice(0, MAX_LESSONS_PER_EVALUATION)
-  return { evaluation: { summary, omlopen, createdAt }, lessons }
+  const checks = (Array.isArray(v.lescontrole) ? v.lescontrole : [])
+    .map((c: unknown): LessonCheck | null => {
+      const r = (c && typeof c === 'object' ? c : {}) as Record<string, unknown>
+      const id = str(r.id, 60)
+      return id && (r.oordeel === 'bevestigd' || r.oordeel === 'weerlegd') ? { id, oordeel: r.oordeel } : null
+    })
+    .filter((c): c is LessonCheck => c !== null)
+    .slice(0, 20)
+  return { evaluation: { summary, omlopen, createdAt }, lessons, checks }
 }
 
 // Validates results the user confirms in the app

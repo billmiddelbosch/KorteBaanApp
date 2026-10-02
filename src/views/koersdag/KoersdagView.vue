@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Camera, ChevronRight, Flag, RotateCcw, Sparkles } from '@lucide/vue'
+import { Camera, ChevronRight, Flag, Plus, RotateCcw, ScanSearch, Sparkles, X } from '@lucide/vue'
 import AlertBox from '@/components/account/AlertBox.vue'
 import ConfirmDialog from '@/components/account/ConfirmDialog.vue'
 import BetsList from '@/components/koersdag/BetsList.vue'
@@ -9,9 +9,9 @@ import StartForm from '@/components/koersdag/StartForm.vue'
 import UpdateCard from '@/components/koersdag/UpdateCard.vue'
 import { errorMessage, errorStatus } from '@/lib/errors'
 import { balanceClass, daysUntil, formatBalance, formatDay, formatEuro } from '@/lib/format'
-import { compressPhoto } from '@/lib/photo'
+import { type CompressedPhoto, compressPhoto } from '@/lib/photo'
 import { ui } from '@/lib/ui'
-import { type StartInput, useKoersdagStore } from '@/stores/koersdag'
+import { MAX_BOARD_PHOTOS, type StartInput, useKoersdagStore } from '@/stores/koersdag'
 import type { Suggestion } from '@/types/koersdag'
 
 const THINKING_TEXTS = {
@@ -93,14 +93,29 @@ watch(
 onBeforeUnmount(() => clearInterval(thinkingTimer))
 
 // ── Photo of the board ──
+// The board doesn't always fit in one photo: collect a few, then check them together
 const photoInput = ref<HTMLInputElement | null>(null)
+const pendingPhotos = ref<CompressedPhoto[]>([])
+const canAddPhoto = computed(() => pendingPhotos.value.length < MAX_BOARD_PHOTOS)
+const photoSrc = (photo: CompressedPhoto) => `data:${photo.mediaType};base64,${photo.image}`
 
 async function onPhoto(event: Event) {
   const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+  const files = [...(input.files ?? [])]
   input.value = ''
-  if (!file) return
-  await run('photo', async () => store.sendPhoto(await compressPhoto(file)))
+  if (!files.length) return
+  await run('compress', async () => {
+    for (const file of files) {
+      if (!canAddPhoto.value) break
+      pendingPhotos.value.push(await compressPhoto(file))
+    }
+  })
+}
+
+const removePhoto = (index: number) => pendingPhotos.value.splice(index, 1)
+
+async function sendPhotos() {
+  if (await run('photo', () => store.sendPhotos(pendingPhotos.value))) pendingPhotos.value = []
 }
 
 // ── Bets ──
@@ -127,7 +142,11 @@ async function betAction(key: string, action: () => Promise<void>) {
 
 const placeBet = (suggestion: Suggestion, amount: number) =>
   betAction(suggestion.id, () =>
-    store.addBet({ bet: `${suggestion.race}: ${suggestion.bet}`, amount, suggestionId: suggestion.id }),
+    store.addBet({
+      bet: `${suggestion.race}: ${suggestion.bet}`,
+      amount,
+      suggestionId: suggestion.id,
+    }),
   )
 
 // ── Finish ──
@@ -152,7 +171,12 @@ onMounted(() => {
     </header>
 
     <!-- Loading -->
-    <div v-if="store.loading && !store.today" class="flex flex-col gap-3" aria-busy="true" aria-label="Laden">
+    <div
+      v-if="store.loading && !store.today"
+      class="flex flex-col gap-3"
+      aria-busy="true"
+      aria-label="Laden"
+    >
       <div class="h-24 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800/60"></div>
       <div class="h-48 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800/60"></div>
     </div>
@@ -186,7 +210,12 @@ onMounted(() => {
         </RouterLink>
         <p :class="ui.muted">Ben je toch op de baan? Vul hieronder de plaats in.</p>
       </section>
-      <StartForm :options="store.today.options" :busy="starting" :error="startError" @start="start" />
+      <StartForm
+        :options="store.today.options"
+        :busy="starting"
+        :error="startError"
+        @start="start"
+      />
     </template>
 
     <!-- Finished: the result of the day -->
@@ -231,7 +260,9 @@ onMounted(() => {
       >
         <div>
           <p :class="ui.muted">Nog over</p>
-          <p class="text-3xl font-semibold tracking-tight tabular-nums text-slate-900 dark:text-slate-100">
+          <p
+            class="text-3xl font-semibold tracking-tight tabular-nums text-slate-900 dark:text-slate-100"
+          >
             {{ formatEuro(koersdag.remaining) }}
           </p>
         </div>
@@ -349,7 +380,57 @@ onMounted(() => {
           data-testid="photo-input"
           @change="onPhoto"
         />
-        <div class="flex gap-2">
+        <!-- Photos waiting to be checked together -->
+        <div v-if="pendingPhotos.length" class="flex flex-col gap-2" data-testid="pending-photos">
+          <p :class="ui.muted">
+            Staat niet het hele bord op de foto? Voeg nog een foto toe (maximaal
+            {{ MAX_BOARD_PHOTOS }}).
+          </p>
+          <ul class="flex gap-2" aria-label="Foto's van het bord">
+            <li v-for="(photo, index) in pendingPhotos" :key="index" class="relative">
+              <img
+                :src="photoSrc(photo)"
+                :alt="`Foto ${index + 1} van het bord`"
+                class="size-16 rounded-lg border border-slate-200 object-cover dark:border-white/10"
+              />
+              <button
+                type="button"
+                class="absolute -top-2 -right-2 flex size-7 items-center justify-center rounded-full bg-slate-900 text-white shadow hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900"
+                :aria-label="`Foto ${index + 1} verwijderen`"
+                :disabled="busy !== null"
+                @click="removePhoto(index)"
+              >
+                <X class="size-4" aria-hidden="true" />
+              </button>
+            </li>
+          </ul>
+          <div class="flex gap-2">
+            <button
+              v-if="canAddPhoto"
+              type="button"
+              :class="[ui.btnSecondary, 'min-h-12 flex-1 text-base']"
+              :disabled="store.thinking || busy !== null"
+              @click="photoInput?.click()"
+            >
+              <Plus class="size-5" aria-hidden="true" />
+              {{ busy === 'compress' ? 'Foto verwerken…' : 'Nog een foto' }}
+            </button>
+            <button
+              type="button"
+              :class="[ui.btnPrimary, 'min-h-12 flex-1 text-base']"
+              :disabled="store.thinking || busy !== null"
+              @click="sendPhotos"
+            >
+              <ScanSearch class="size-5" aria-hidden="true" />
+              <template v-if="busy === 'photo'">Bord controleren…</template>
+              <template v-else-if="pendingPhotos.length > 1">
+                Controleer bord ({{ pendingPhotos.length }} foto's)
+              </template>
+              <template v-else>Controleer bord</template>
+            </button>
+          </div>
+        </div>
+        <div v-else class="flex gap-2">
           <button
             type="button"
             :class="[canFinishNow ? ui.btnSecondary : ui.btnPrimary, 'min-h-12 flex-1 text-base']"
@@ -357,7 +438,7 @@ onMounted(() => {
             @click="photoInput?.click()"
           >
             <Camera class="size-5" aria-hidden="true" />
-            {{ busy === 'photo' ? 'Foto versturen…' : 'Foto van het bord' }}
+            {{ busy === 'compress' ? 'Foto verwerken…' : 'Foto van het bord' }}
           </button>
           <button
             v-if="canFinishNow"
@@ -393,8 +474,8 @@ onMounted(() => {
       @cancel="finishOpen = false"
     >
       <p>
-        De finale is nog niet geweest. Na afronden kun je geen updates of inzetten meer toevoegen; de
-        uitslag komt in Terugblik.
+        De finale is nog niet geweest. Na afronden kun je geen updates of inzetten meer toevoegen;
+        de uitslag komt in Terugblik.
       </p>
       <AlertBox v-if="actionError" class="mt-3">{{ actionError }}</AlertBox>
     </ConfirmDialog>

@@ -59,6 +59,8 @@ const MAX_CONTINUATIONS = 3
 // Subscription (OAuth) tokens are issued for Claude Code; requests identify as such
 const OAUTH_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 const WEB_SEARCH_TOOL = { type: 'web_search_20250305', name: 'web_search', max_uses: 5 }
+// Reads a page whose URL is in the prompt (e.g. ZEturf for loting and quoteringen)
+const WEB_FETCH_TOOL = { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 4, max_content_tokens: 40_000 }
 
 export interface ChatImage {
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
@@ -100,6 +102,7 @@ interface ContentBlock {
 interface MessagesResponse {
   content: ContentBlock[]
   stop_reason: string | null
+  usage?: { input_tokens?: number; output_tokens?: number }
 }
 
 type ApiMessage = { role: 'user' | 'assistant'; content: string | ContentBlock[] }
@@ -146,8 +149,14 @@ export function sourcesOf(content: ContentBlock[]): { url: string; title: string
   for (const block of content) {
     for (const c of block.citations ?? []) add(c.url, c.title)
   }
-  // No citations: fall back to what the searches returned
+  // No citations: fall back to the fetched pages and what the searches returned
   if (found.size === 0) {
+    for (const block of content) {
+      if (block.type === 'web_fetch_tool_result' && block.content && typeof block.content === 'object') {
+        const r = block.content as { type?: unknown; url?: unknown; content?: { title?: unknown } }
+        if (r.type === 'web_fetch_result') add(r.url, r.content?.title)
+      }
+    }
     for (const block of content) {
       if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
         for (const r of block.content as { url?: unknown; title?: unknown }[]) add(r.url, r.title)
@@ -190,46 +199,146 @@ async function errorFor(res: Response): Promise<ClaudeError> {
   return new ClaudeError('other', `Claude gaf een onverwachte fout (${res.status}). Probeer het opnieuw.`)
 }
 
-// One chat turn with web search. Non-streaming; long searches may pause the turn, which we continue.
-export async function askClaude(
-  token: string,
-  input: { system: string; turns: ChatTurn[]; timeoutMs: number },
-): Promise<ChatReply> {
+// A tool of our own (e.g. the kennisbank) that Claude may call; runTool answers it
+export interface CustomTool {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+}
+
+export type ToolRunner = (name: string, input: unknown) => Promise<string>
+
+export const TOOL_BUDGET_SPENT = 'Toolbudget op; geef nu je antwoord.'
+
+export interface AskInput {
+  system: string
+  turns: ChatTurn[]
+  timeoutMs: number
+  webFetch?: boolean
+  // Own tools and how often Claude may call them (rounds of tool calls) before it must answer
+  tools?: CustomTool[]
+  runTool?: ToolRunner
+  maxToolRounds?: number
+  // Web searches over the whole turn (default: 5 per request)
+  searchBudget?: number
+  // Output limit per request (default 4096); long answers such as a read-out board need more
+  maxTokens?: number
+}
+
+const isWebTool = (t: unknown) => (t as { type?: string }).type?.startsWith('web_') ?? false
+
+async function toolResults(blocks: ContentBlock[], runTool: ToolRunner | undefined, spent: boolean): Promise<ContentBlock[]> {
+  const results: ContentBlock[] = []
+  for (const block of blocks) {
+    if (block.type !== 'tool_use') continue
+    const { id, name, input } = block as ContentBlock & { id: string; name: string; input: unknown }
+    let content: string
+    let isError = false
+    if (spent || !runTool) {
+      content = TOOL_BUDGET_SPENT
+      isError = true
+    } else {
+      try {
+        content = await runTool(name, input)
+      } catch (err) {
+        console.error('Tool failed', name, err)
+        content = `Tool ${name} faalde: ${(err as Error).message}`
+        isError = true
+      }
+    }
+    results.push({ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) } as ContentBlock)
+  }
+  return results
+}
+
+// One chat turn with web search (and web fetch when asked), optionally with own tools.
+// Non-streaming; long searches may pause the turn, which we continue. With own tools the
+// answer is the text after the last tool round (earlier text is Claude thinking aloud).
+export async function askClaude(token: string, input: AskInput): Promise<ChatReply> {
   const signal = AbortSignal.timeout(input.timeoutMs)
   const system = [
     { type: 'text', text: OAUTH_SYSTEM_PREFIX },
     { type: 'text', text: input.system },
   ]
   const messages = toApiMessages(input.turns)
-  let tools: unknown[] | undefined = [WEB_SEARCH_TOOL]
+  const custom = input.tools ?? []
+  const maxToolRounds = custom.length ? (input.maxToolRounds ?? 3) : 0
+  const searchBudget = input.searchBudget ?? WEB_SEARCH_TOOL.max_uses
+  let webTools: unknown[] = input.webFetch ? [WEB_SEARCH_TOOL, WEB_FETCH_TOOL] : [WEB_SEARCH_TOOL]
   const content: ContentBlock[] = []
+  let textFrom = 0
+  let toolRounds = 0
+  let searches = 0
+  const stops: (string | null)[] = []
+  let outputTokens = 0
 
-  for (let round = 0; round <= MAX_CONTINUATIONS; round++) {
-    const body = { model: CHAT_MODEL, max_tokens: MAX_TOKENS, system, messages, ...(tools ? { tools } : {}) }
+  // Pause continuations plus tool rounds, plus the round in which Claude must answer
+  const maxRequests = MAX_CONTINUATIONS + 1 + (maxToolRounds ? maxToolRounds + 1 : 0)
+  for (let request = 0; request < maxRequests; request++) {
+    const lastRequest = request === maxRequests - 1
+    // Budget spent or no requests left: no more tools, Claude has to write its answer now
+    const mustAnswer = maxToolRounds > 0 && (toolRounds >= maxToolRounds || lastRequest)
+    const web = webTools.map((t) =>
+      t === WEB_SEARCH_TOOL ? { ...WEB_SEARCH_TOOL, max_uses: Math.max(1, Math.min(WEB_SEARCH_TOOL.max_uses, searchBudget - searches)) } : t,
+    )
+    const tools = [...web, ...custom]
+    const body = {
+      model: CHAT_MODEL,
+      max_tokens: input.maxTokens ?? MAX_TOKENS,
+      system,
+      messages,
+      ...(tools.length ? { tools } : {}),
+      ...(mustAnswer ? { tool_choice: { type: 'none' } } : {}),
+    }
     let res = await post(token, body, signal)
-    // If web search isn't available for this token, answer without it rather than not at all
-    if (res.status === 400 && tools) {
+    // If a web tool isn't available for this token, drop web fetch first, then all web tools:
+    // answering with less is better than not answering
+    while (res.status === 400 && webTools.length) {
       const detail = await res.clone().text().catch(() => '')
-      if (/web_search|tool/i.test(detail)) {
-        console.warn('Web search rejected, retrying without tools')
-        tools = undefined
-        const { tools: _t, ...withoutTools } = body
-        res = await post(token, withoutTools, signal)
-      }
+      if (!/web_search|web_fetch/i.test(detail)) break
+      const withoutFetch = webTools.filter((t) => t !== WEB_FETCH_TOOL)
+      webTools = /web_fetch/i.test(detail) && withoutFetch.length < webTools.length ? withoutFetch : []
+      console.warn(webTools.length ? 'Web fetch rejected, retrying with web search only' : 'Web search rejected, retrying without web tools')
+      const retryTools = [...webTools.map((t) => (t === WEB_SEARCH_TOOL ? web[0] : t)), ...custom]
+      const { tools: _t, tool_choice: toolChoice, ...rest } = body
+      res = await post(token, retryTools.length ? { ...rest, tools: retryTools, ...(toolChoice ? { tool_choice: toolChoice } : {}) } : rest, signal)
     }
     if (!res.ok) throw await errorFor(res)
 
     const data = (await res.json()) as MessagesResponse
     content.push(...data.content)
-    if (data.stop_reason !== 'pause_turn') break
+    stops.push(data.stop_reason)
+    outputTokens += data.usage?.output_tokens ?? 0
+    searches += data.content.filter((b) => b.type === 'server_tool_use' && (b as { name?: string }).name === 'web_search').length
+    if (data.stop_reason === 'pause_turn') {
+      messages.push({ role: 'assistant', content: data.content })
+      continue
+    }
+    // On the last request a tool call can no longer be answered: keep what Claude wrote
+    if (data.stop_reason !== 'tool_use' || !maxToolRounds || lastRequest) break
+
+    const spent = toolRounds >= maxToolRounds
+    toolRounds++
     messages.push({ role: 'assistant', content: data.content })
+    messages.push({ role: 'user', content: await toolResults(data.content, input.runTool, spent) })
+    textFrom = content.length
   }
 
   const text = content
+    .slice(textFrom)
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text)
     .join('')
     .trim()
-  if (!text) throw new ClaudeError('other', 'Claude gaf een leeg antwoord. Probeer het opnieuw.')
+  console.info(`Claude stop reasons: ${stops.join(', ')} (tool rounds ${toolRounds}/${maxToolRounds}, searches ${searches}, output tokens ${outputTokens})`)
+  if (!text) {
+    // Nothing to show: log what came instead of text, to find out why
+    const blocks = content.slice(textFrom).map((b) => b.type)
+    console.error(`Claude reply without text; blocks: ${blocks.join(', ') || 'none'}`)
+    if (stops.at(-1) === 'max_tokens') {
+      throw new ClaudeError('other', "Het antwoord werd te lang. Probeer het opnieuw, eventueel met minder foto's.")
+    }
+    throw new ClaudeError('other', 'Claude gaf een leeg antwoord. Probeer het opnieuw.')
+  }
   return { text, sources: sourcesOf(content) }
 }

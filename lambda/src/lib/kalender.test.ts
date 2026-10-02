@@ -13,10 +13,10 @@ const page = `
 describe('parseKalender', () => {
   it('reads date, place and cancellation per row', () => {
     expect(parseKalender(page)).toEqual([
-      { place: 'Assendelft', date: '2026-05-09', cancelled: false },
-      { place: 'Sassenheim', date: '2026-06-19', cancelled: true },
-      { place: 'Medemblik', date: '2026-09-21', cancelled: false },
-      { place: "'t Zand", date: '2026-10-12', cancelled: false },
+      { place: 'Assendelft', date: '2026-05-09', cancelled: false, event: '/events/109/kb-assendelft' },
+      { place: 'Sassenheim', date: '2026-06-19', cancelled: true, event: '/events/86/sassenheim-2026' },
+      { place: 'Medemblik', date: '2026-09-21', cancelled: false, event: '/events/104/medemblik-2026' },
+      { place: "'t Zand", date: '2026-10-12', cancelled: false, event: '/events/108/tzand-2026' },
     ])
   })
 

@@ -2,7 +2,7 @@ import type { APIGatewayProxyEvent, Context } from 'aws-lambda'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Draverij, LockedAdvice } from './lib/analysis'
 import { signToken } from './lib/crypto'
-import type { KoersdagRecord } from './lib/koersdag'
+import type { BoardReading, KoersdagRecord } from './lib/koersdag'
 import type { AiConfig, SessionRecord, UserRecord } from './lib/store'
 
 // In-memory stand-ins for DynamoDB, S3, Secrets Manager, Claude and the worker invoke
@@ -13,6 +13,7 @@ const db = vi.hoisted(() => ({
   draverijen: new Map<string, Draverij>(),
   advice: new Map<string, LockedAdvice>(),
   koersdagen: new Map<string, KoersdagRecord>(),
+  board: [] as { draverijId: string; reading: BoardReading }[],
   photos: new Map<string, { bytes: Uint8Array; contentType: string }>(),
   sessions: [] as { userId: string; session: SessionRecord }[],
   jobs: [] as { userId: string; draverijId: string; thinkingSince: string }[],
@@ -83,8 +84,17 @@ vi.mock('./lib/koersdagStore', async (importOriginal) => {
       if (opts.expectUpdatedAt && current?.updatedAt !== opts.expectUpdatedAt) throw new actual.KoersdagChangedError()
       db.koersdagen.set(k, clone(record))
     },
+    putBoardReading: async (_a: string, draverijId: string, reading: BoardReading) =>
+      void db.board.push({ draverijId, reading: clone(reading) }),
+    listBoardReadings: async (_a: string, draverijId: string, omloop: number) =>
+      db.board
+        .filter((b) => b.draverijId === draverijId && b.reading.omloop === omloop)
+        .map((b) => clone(b.reading))
+        .reverse(),
   }
 })
+
+vi.mock('./lib/zeturf', () => ({ zeturfOmlopen: async () => null }))
 
 const { handler: koersdag } = await import('./koersdag')
 const { handler: worker } = await import('./koersdagWorker')
@@ -139,6 +149,7 @@ beforeEach(() => {
   for (const map of [db.users, db.usage, db.draverijen, db.advice, db.koersdagen, db.photos]) map.clear()
   db.jobs.length = 0
   db.sessions.length = 0
+  db.board.length = 0
   db.ai = { status: 'connected', tokenHint: '…abcd', connectedAt: '2026-09-01T10:00:00.000Z' }
   const base = { tokenVersion: 0, failedLogins: 0, createdAt: '2026-09-01T10:00:00.000Z', status: 'active' as const }
   user = { ...base, id: 'owner-1', name: 'Bill', username: 'bill', role: 'owner', dailyLimit: null }
@@ -281,6 +292,7 @@ describe('during the koersdag', () => {
         oordeel: 'aangepast',
         wijzigingen: ['Fleur heeft een hogere quota'],
         foto: { klopt: false, verschillen: ['Quota Fleur 3,2 → 4,1'] },
+        bord: { quota: ['3 Fleur: winnend 4,1'], loting: [] },
         advies: { toelichting: 'Minder inzetten', keuzes: [{ inzet: 'Winnaar: Fleur', bedrag: 10, nieuw: true }] },
       }),
     )
@@ -296,6 +308,66 @@ describe('during the koersdag', () => {
       verdict: 'changed',
       photoCheck: { matches: false, differences: ['Quota Fleur 3,2 → 4,1'] },
     })
+
+    // What was read from the board reaches the next visitor's advice for the same omloop
+    expect(db.board).toEqual([
+      { draverijId: id, reading: expect.objectContaining({ omloop: 1, userId: user.id, quota: ['3 Fleur: winnend 4,1'] }) },
+    ])
+    await start(friend)
+    vi.mocked(askClaude).mockResolvedValueOnce(KEPT)
+    await runWorker()
+    const friendSystem = vi.mocked(askClaude).mock.calls[2][1].system
+    expect(friendSystem).toContain('(foto van een andere bezoeker)')
+    expect(friendSystem).toContain('- 3 Fleur: winnend 4,1')
+  })
+
+  it('checks several photos of the board in one run', async () => {
+    const id = await started()
+    const photo = (body: unknown) => call('POST', '/koersdagen/{id}/photo', { as: user, params: { id }, body })
+    const png = { mediaType: 'image/png', image: PNG }
+    const jpeg = { mediaType: 'image/jpeg', image: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64') }
+    expect((await photo({ images: [] })).body.message).toBe('Maak eerst een foto.')
+    expect((await photo({ images: [png, png, png, png] })).body.message).toBe("Stuur maximaal 3 foto's tegelijk.")
+    expect((await photo({ images: [png, { mediaType: 'image/png' }] })).body.message).toBe('Maak eerst een foto.')
+    const big = { mediaType: 'image/png', image: PNG + 'A'.repeat(2_000_000) }
+    expect((await photo({ images: [big, big, big] })).status).toBe(413)
+    // A refused request leaves nothing behind
+    expect(db.photos.size).toBe(0)
+
+    const sent = await photo({ images: [png, jpeg] })
+    expect(sent.status).toBe(202)
+    expect([...db.photos.values()].map((p) => p.contentType)).toEqual(['image/png', 'image/jpeg'])
+
+    vi.mocked(askClaude).mockResolvedValueOnce(
+      reply({ foto: { klopt: true }, bord: { quota: ['3 Fleur: winnend 4,1'], loting: ['Koppel 1: Fleur – Hessel'] }, advies: { keuzes: [] } }),
+    )
+    await runWorker()
+    const ask = vi.mocked(askClaude).mock.calls[1][1]
+    expect(ask.turns[0].images).toEqual([
+      { mediaType: 'image/png', data: PNG },
+      { mediaType: 'image/jpeg', data: jpeg.image },
+    ])
+    expect(ask.turns[0].text).toContain("Bijgevoegd zijn 2 foto's")
+    // Both photos are removed once checked, and the board is read as one
+    expect(db.photos.size).toBe(0)
+    expect(db.board).toHaveLength(1)
+    expect(db.koersdagen.get(`${user.id}/${id}`)).toMatchObject({ status: 'idle', photos: undefined })
+  })
+
+  it('still checks the single photo of a run started by the older API', async () => {
+    const id = await started()
+    expect((await call('POST', '/koersdagen/{id}/photo', { as: user, params: { id }, body: { mediaType: 'image/png', image: PNG } })).status).toBe(202)
+    // Rewrite the run as the older API stored it
+    const record = db.koersdagen.get(`${user.id}/${id}`)!
+    const [{ key, mediaType }] = record.photos!
+    db.koersdagen.set(`${user.id}/${id}`, { ...record, photos: undefined, photoKey: key, photoMediaType: mediaType })
+
+    vi.mocked(askClaude).mockResolvedValueOnce(reply({ foto: { klopt: true }, advies: { keuzes: [] } }))
+    await runWorker()
+    const ask = vi.mocked(askClaude).mock.calls[1][1]
+    expect(ask.turns[0].images).toEqual([{ mediaType: 'image/png', data: PNG }])
+    expect(ask.turns[0].text).toContain('Bijgevoegd is een foto')
+    expect(db.photos.size).toBe(0)
   })
 
   it('moves to the next omloop and records an unreadable reply as an error', async () => {

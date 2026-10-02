@@ -1,7 +1,9 @@
 // Koersdag: domain types, the prompt per omloop and parsing of the AI's structured update
 import type { Review } from './terugblik'
+import type { ZeturfOmloop } from './zeturf'
 import {
   formatDutchDate,
+  kennisbankSection,
   THINKING_STALE_MS,
   STALE_ERROR,
   type AdviceProposal,
@@ -23,6 +25,28 @@ export interface Suggestion {
   reasoning: string
   // New or different compared to the previous advice
   changed: boolean
+  // Chance (0–1) that this bet pays out, as estimated by the AI. Absent on older updates
+  chance?: number | null
+  // Quota from the board for exactly this bet (decimal, stake included), when known
+  odds?: number | null
+  // Computed by the app: expected return per euro staked (chance × odds − 1); null without odds
+  expectedValue?: number | null
+  // Computed by the app: the lowest quota at which the bet breaks even (1 / chance)
+  minOdds?: number | null
+}
+
+// Advise only when chance × quota is at least this: a margin for moving quota and a rough chance
+export const MIN_VALUE_FACTOR = 1.1
+
+// Expected return per euro staked: 0.2 = on average 20 cent profit per euro
+export function expectedValue(chance: number | null, odds: number | null): number | null {
+  if (chance === null || odds === null) return null
+  return Math.round((chance * odds - 1) * 100) / 100
+}
+
+// Break-even quota: below this the bet loses money on average
+export function minOddsFor(chance: number | null): number | null {
+  return chance === null ? null : Math.round((1 / chance) * 100) / 100
 }
 
 export interface PhotoCheck {
@@ -60,6 +84,11 @@ export interface Bet {
   createdAt: string
 }
 
+export interface StoredPhoto {
+  key: string
+  mediaType: string
+}
+
 export interface KoersdagRecord {
   draverij: Draverij
   userId: string
@@ -69,7 +98,9 @@ export interface KoersdagRecord {
   // Set when a worker run starts; the worker only saves while this still matches
   thinkingSince?: string
   step?: UpdateKind
-  // S3 key of the photo the worker should check (deleted after the run)
+  // S3 keys of the photos the worker should check, in order (deleted after the run)
+  photos?: StoredPhoto[]
+  // Before multiple photos: one photo. Still read for a run started by the older API
   photoKey?: string
   photoMediaType?: string
   omloop: number
@@ -90,12 +121,21 @@ export const MAX_BETS = 200
 export const MAX_UPDATES = 60
 export const MAX_BET_LENGTH = 200
 export const MAX_PLACE_LENGTH = 40
-// ≈ 3.7 MB of image; the app compresses photos to a few hundred KB
+// ≈ 3.7 MB of image; the app compresses photos to a few hundred KB. Also the limit for all
+// photos of one check together: a Lambda request may be at most 6 MB
 export const MAX_PHOTO_BASE64 = 5_000_000
+// A wide board, or loting and quota apart, can take more than one photo
+export const MAX_PHOTOS = 3
 export const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
 export type PhotoType = (typeof PHOTO_TYPES)[number]
 // Keep the koersdag for Terugblik after the day itself
 export const KEEP_DAYS = 60
+
+// The photos of a photo check, including the single photo of an older record
+export function photosOf(record: Pick<KoersdagRecord, 'photos' | 'photoKey' | 'photoMediaType'>): StoredPhoto[] {
+  if (record.photos?.length) return record.photos
+  return record.photoKey ? [{ key: record.photoKey, mediaType: record.photoMediaType ?? 'image/jpeg' }] : []
+}
 
 export const omloopLabel = (n: number) => `${n}e omloop`
 
@@ -119,6 +159,52 @@ export function sniffImage(bytes: Uint8Array): PhotoType | null {
   return null
 }
 
+// ── Bordfoto's ───────────────────────────────────────────────────────────
+
+// What the AI read from a photo of the quotabord or the loting. Shared with everyone on the same
+// koersdag, because live quoteringen are only available from the board itself.
+export interface BoardReading {
+  id: string
+  omloop: number
+  // Who took the photo; only used to tell "your photo" from someone else's
+  userId: string
+  readAt: string
+  // "3 Fleur de Lis: winnend 3,2, plaats 1,4"
+  quota: string[]
+  // "Koppel 1: Fleur de Lis – Hessel B"
+  loting: string[]
+}
+
+export function parseBoard(raw: string): Pick<BoardReading, 'quota' | 'loting'> | null {
+  const parsed = parseJson(raw.match(UPDATE_RE)?.[1] ?? raw.match(/\{[\s\S]*\}/)?.[0])
+  if (!parsed || typeof parsed !== 'object') return null
+  const bord = (parsed as Record<string, unknown>).bord
+  if (!bord || typeof bord !== 'object') return null
+  const b = bord as Record<string, unknown>
+  const board = { quota: strings(b.quota, 30, 200), loting: strings(b.loting, 30, 200) }
+  return board.quota.length || board.loting.length ? board : null
+}
+
+const clock = (iso: string) =>
+  new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' }).format(
+    new Date(iso),
+  )
+
+function describeBoard(readings: BoardReading[], userId: string): string {
+  return readings
+    .map((r) => {
+      const who = r.userId === userId ? 'foto van deze gebruiker' : 'foto van een andere bezoeker'
+      return [
+        `Om ${clock(r.readAt)} (${who}):`,
+        r.quota.length ? `Quota:\n${r.quota.map((q) => `- ${q}`).join('\n')}` : '',
+        r.loting.length ? `Loting:\n${r.loting.map((l) => `- ${l}`).join('\n')}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    })
+    .join('\n\n')
+}
+
 // ── Prompt ───────────────────────────────────────────────────────────────
 
 function describeProposal(p: AdviceProposal): string {
@@ -137,7 +223,10 @@ function describeProposal(p: AdviceProposal): string {
 function describeUpdate(u: KoersdagUpdate): string {
   const advice = u.advice.length
     ? u.advice
-        .map((s) => `- ${[s.race, s.bet].filter(Boolean).join(' — ')}${s.amount !== null ? ` (${euro(s.amount)})` : ''}`)
+        .map(
+          (s) =>
+            `- ${[s.race, s.bet].filter(Boolean).join(' — ')}${s.amount !== null ? ` (${euro(s.amount)})` : ''}${s.chance != null ? `, kans ${Math.round(s.chance * 100)}%` : ''}${s.odds != null ? `, quota ${s.odds}` : ''}`,
+        )
         .join('\n')
     : '- niet (extra) inzetten'
   return `${omloopLabel(u.omloop)} (${u.kind === 'photo' ? 'foto' : 'online'}):
@@ -152,8 +241,16 @@ export function buildKoersdagPrompt(input: {
   advice: LockedAdvice | undefined
   today: string
   kind: UpdateKind
+  // Latest bordfoto readings for this omloop, newest first (from all users)
+  board: BoardReading[]
+  // Online check only; null when ZEturf could not be read
+  zeturf?: ZeturfOmloop[] | null
+  // Kennisbank dossier; null = unreachable, undefined = not configured
+  kennisbank?: string | null
+  // Photo check only: how many photos are attached (default 1)
+  photoCount?: number
 }): { system: string; text: string } {
-  const { record, advice, kind } = input
+  const { record, advice, kind, board } = input
   const { staked, paidOut, remaining } = totals(record)
   const omloop = omloopLabel(record.omloop)
   const bets = record.bets.length
@@ -172,29 +269,59 @@ export function buildKoersdagPrompt(input: {
 Vandaag is het ${formatDutchDate(input.today)}. De gebruiker is op de kortebaandraverij in ${record.draverij.place} en gebruikt de app tijdens de koersdag, op de telefoon. Dit is geen gesprek: je geeft per omloop één overzicht dat de app als kaart toont.
 
 Budget: ${euro(record.budget)}. Ingezet: ${euro(staked)}. Uitbetaald: ${euro(paidOut)}. Nog over: ${euro(remaining)}.
+Het budget is een richtlijn van de gebruiker, geen harde grens: jij adviseert, de gebruiker beslist wat er met het advies gebeurt.
 
 Vastgelegd advies van vóór de koersdag:
 ${advice ? describeProposal(advice.proposal) : 'Er is geen vastgelegd advies. Maak bij de eerste omloop een eerste advies op basis van het budget en de actuele informatie.'}
 
 Ingezette bedragen:
 ${bets}
-${previous.length ? `\nEerdere updates vandaag (oudste eerst):\n${previous.map(describeUpdate).join('\n\n')}\n` : ''}
+${previous.length ? `\nEerdere updates vandaag (oudste eerst):\n${previous.map(describeUpdate).join('\n\n')}\n` : ''}${kennisbankSection(input.kennisbank, 'koersdag')}
+## Quotabord bij de ${omloop}
+${board.length ? `Afgelezen van bordfoto's die bezoekers vandaag maakten (nieuwste eerst). Dit zijn de enige actuele quota; ze schuiven nog tot de inzet sluit, dus weeg mee hoe oud ze zijn.\n${describeBoard(board, record.userId)}` : 'Er is nog geen bordfoto van deze omloop. Actuele quota zijn dus onbekend: verzin ze niet en noem ze niet als feit.'}
+
 ## Vorm van je antwoord
 Antwoord met precies één blok in deze vorm (geldige JSON, bedragen in euro's of null) en verder niets:
-<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "onderbouwing": "…", "nieuw": false}]}, "finale": false}</koersdag>
+<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "bord": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "kans": 0.45, "quota": 3.1, "onderbouwing": "…", "nieuw": false}]}, "kansen": [{"koppel": 1, "links": "…", "rechts": "…", "winkans_links": 0.55, "quota_links": 2.4, "quota_rechts": 3.1}], "finale": false}</koersdag>
 
 - "oordeel" is "blijft" als het vorige advies (of het vastgelegde advies) nog klopt, anders "aangepast"; zet bij "aangepast" in "wijzigingen" kort wat er veranderde en waarom.
-- "advies" gaat over wat er nú (extra) ingezet moet worden, binnen wat er nog over is van het budget. Is het beter om niet (extra) in te zetten, geef dan een lege lijst "keuzes" en leg het uit in "toelichting".
+- "advies" gaat over wat er nú (extra) ingezet moet worden. Richt je op wat er nog over is van het budget, maar houd het advies open: is het budget (bijna) op of is een kans meer inzet waard, geef die keuze dan toch, met het bedrag dat je passend vindt, en zeg in de "onderbouwing" dat het buiten het budget valt. Is het beter om niet (extra) in te zetten, geef dan een lege lijst "keuzes" en leg het uit in "toelichting"; dat het budget op is, is daarvoor alleen geen reden.
+- Geef bij elke keuze "kans": jouw inschatting (0–1) dat precies deze inzet uitbetaalt, en "quota": de quota van het bord voor deze inzet (winnend of plaats), of null als je die niet kent. De kans past bij je "kansen" per koppel en bij alle koppels die het paard nog moet winnen. De app rekent zelf de verwachte waarde uit (kans × quota − 1 per euro) en, zonder quota, de minimale quota (1 / kans).
+- Adviseer alleen inzetten met een duidelijk positieve verwachte waarde: kans × quota minstens ${String(MIN_VALUE_FACTOR).replace('.', ',')}. De quota schuiven nog tot de inzet sluit en jouw kans is een schatting; daarom die marge. Een sterke favoriet met een lage quota is dus vaak géén goede inzet. Is de quota onbekend, geef de keuze alleen als de minimale quota realistisch is en noem in de "onderbouwing" vanaf welke quota het de moeite waard is.
+- Zie je in een volgende omloop een grote kans (een paard dat je duidelijk hoger inschat dan de quota doet vermoeden), noem die dan in "toelichting", ook als het budget daarvoor niet meer toereikend is. De gebruiker kiest zelf wat te doen.
 - Zet "nieuw" op true bij een keuze die nieuw is of anders dan in het vorige advies.
+- "kansen": per koppel van de ${omloop} jouw inschatting dat het linker paard wint (0–1), met de winnend-quota van het bord als je die kent (anders null). Alleen als de loting bekend is, anders een lege lijst. De app legt ze vast en vergelijkt ze na afloop met de uitslag.
 - Zet "finale" op true als ${omloop} de finale is (daarna is de koersdag voorbij).
 - Schrijf kort en concreet in het Nederlands; de gebruiker leest dit tussen de koersen door.`
 
   const text =
     kind === 'photo'
-      ? `Bijgevoegd is een foto van het quotabord of de loting, genomen bij de ${omloop}. Lees de foto nauwkeurig af en vergelijk met wat bekend is. De foto is leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}. Zoek alleen online als de foto iets onduidelijks bevat.`
-      : `Zoek online naar de meest recente ontwikkelingen voor de ${omloop} in ${record.draverij.place}: wie start wel of niet (afmeldingen), wijzigingen in de loting en de quoteringen. Bekrachtig het advies of pas het aan. Laat "foto" op null.`
+      ? (input.photoCount ?? 1) > 1
+        ? `Bijgevoegd zijn ${input.photoCount} foto's van het quotabord of de loting, genomen bij de ${omloop}. Samen vormen ze één bord: ze kunnen elkaar overlappen of elk een deel tonen (bijvoorbeeld de loting en de quota apart). Lees ze nauwkeurig en als geheel af, tel regels die op meer foto's staan één keer en vergelijk met wat bekend is. De foto's zijn leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}; noem alleen echte verschillen met wat bekend is, niet wat op de ene foto ontbreekt en op de andere staat.
+Zet in "bord" letterlijk wat je op de foto's leest, samengevoegd tot één bord, zodat andere bezoekers het ook kunnen gebruiken: {"quota": ["3 Fleur de Lis: winnend 3,2, plaats 1,4"], "loting": ["Koppel 1: Fleur de Lis – Hessel B"]}. Neem alleen op wat je zeker kunt lezen en laat een lijst leeg als het op geen van de foto's staat. Zoek alleen online als de foto's iets onduidelijks bevatten.`
+        : `Bijgevoegd is een foto van het quotabord of de loting, genomen bij de ${omloop}. Lees de foto nauwkeurig af en vergelijk met wat bekend is. De foto is leidend: pas het advies erop aan. Vul "foto" in als {"klopt": true/false, "verschillen": ["Quota Fleur de Lis 3,2 → 4,1"]}.
+Zet in "bord" letterlijk wat je op de foto leest, zodat andere bezoekers het ook kunnen gebruiken: {"quota": ["3 Fleur de Lis: winnend 3,2, plaats 1,4"], "loting": ["Koppel 1: Fleur de Lis – Hessel B"]}. Neem alleen op wat je zeker kunt lezen en laat een lijst leeg als het niet op de foto staat. Zoek alleen online als de foto iets onduidelijks bevat.`
+      : `Zoek de meest recente ontwikkelingen voor de ${omloop} in ${record.draverij.place}: wie start wel of niet (afmeldingen) en wijzigingen in de loting. Bekrachtig het advies of pas het aan. Laat "foto" en "bord" op null.
+
+${zeturfText(input.zeturf, record)}
+Zoek daarnaast online naar nieuws over afmeldingen dat daar nog niet in staat. Quota staan niet online: gebruik alleen die van het quotabord hierboven. Is er geen bordfoto, noem dan in "bevindingen" dat een foto van het quotabord het advies scherper maakt.`
 
   return { system, text }
+}
+
+function zeturfText(zeturf: ZeturfOmloop[] | null | undefined, record: KoersdagRecord): string {
+  const place = record.draverij.place
+  if (!zeturf) {
+    return `ZEturf, de totalisator van de kortebaan, was niet bereikbaar. Zoek online naar "zeturf kortebaan ${place}" en de loting.`
+  }
+  if (!zeturf.length) {
+    return `ZEturf, de totalisator van de kortebaan, heeft (nog) geen Winnend & Plaats voor de kortebaan in ${place} op deze datum. Zoek de loting en starters online, bijvoorbeeld bij de organiserende vereniging.`
+  }
+  const current = zeturf.find((z) => z.omloop === record.omloop)
+  const pages = current ? [current] : zeturf.slice(-1)
+  return `Haal bij ZEturf, de totalisator van de kortebaan, met web_fetch deze pagina op:
+${pages.map((z) => `- ${omloopLabel(z.omloop)}: ${z.url}`).join('\n')}
+${current ? '' : `ZEturf biedt de ${omloopLabel(record.omloop)} (nog) niet aan (wel omloop ${zeturf.map((z) => z.omloop).join(', ')}); vermeld dat in "bevindingen".\n`}Neem daar de starters, niet-starters en loting van over. De quoteringen op die pagina worden pas in de browser ingeladen: lees ze daar niet af.`
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────
@@ -217,6 +344,39 @@ function parseJson(text: string | undefined): unknown {
   } catch {
     return undefined
   }
+}
+
+export interface KoppelKans {
+  omloop: number
+  koppel: number
+  links: string
+  rechts: string
+  winkansLinks: number
+  quotaLinks: number | null
+  quotaRechts: number | null
+}
+
+const quota = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 1 && v < 1000 ? v : null)
+const probability = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 1 ? v : null)
+
+// Win chances per koppel from a <koersdag> reply, for scoring afterwards
+export function parseKansen(raw: string, omloop: number): KoppelKans[] {
+  const parsed = parseJson(raw.match(UPDATE_RE)?.[1] ?? raw.match(/\{[\s\S]*\}/)?.[0])
+  const list = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>).kansen : undefined
+  return (Array.isArray(list) ? list : [])
+    .slice(0, 40)
+    .map((k): KoppelKans | null => {
+      if (!k || typeof k !== 'object') return null
+      const v = k as Record<string, unknown>
+      const links = str(v.links, 80)
+      const rechts = str(v.rechts, 80)
+      const p = v.winkans_links
+      if (!links || !rechts || typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) return null
+      const koppel = typeof v.koppel === 'number' && Number.isInteger(v.koppel) && v.koppel > 0 ? v.koppel : 0
+      return { omloop, koppel, links, rechts, winkansLinks: p, quotaLinks: quota(v.quota_links), quotaRechts: quota(v.quota_rechts) }
+    })
+    .filter((k): k is KoppelKans => k !== null)
+    .map((k, i) => ({ ...k, koppel: k.koppel || i + 1 }))
 }
 
 export const UNREADABLE_ERROR = 'De AI gaf een onleesbaar antwoord. Probeer het opnieuw.'
@@ -247,6 +407,8 @@ export function parseUpdate(
       const pick = p as Record<string, unknown>
       const bet = str(pick.inzet, MAX_BET_LENGTH)
       if (!bet) return null
+      const chance = probability(pick.kans)
+      const odds = quota(pick.quota)
       return {
         id: meta.newId(),
         race: str(pick.koers, 120),
@@ -254,6 +416,10 @@ export function parseUpdate(
         amount: amount(pick.bedrag),
         reasoning: str(pick.onderbouwing, 600),
         changed: pick.nieuw === true,
+        chance,
+        odds,
+        expectedValue: expectedValue(chance, odds),
+        minOdds: minOddsFor(chance),
       }
     })
     .filter((s): s is Suggestion => s !== null)

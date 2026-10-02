@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { claimAiRun, nextThinkingSince } from './lib/aiAccess'
 import { DRAVERIJ_ID_RE } from './lib/analysis'
-import { deleteLesson, listLessons } from './lib/analysisStore'
+import * as kb from './lib/kb/service'
 import { createHandler, HttpError, ok, readString, type RouteRequest } from './lib/api'
 import { MAX_BUDGET, MAX_PHOTO_BASE64, PHOTO_TYPES, sniffImage, totals, type KoersdagRecord } from './lib/koersdag'
 import { getKoersdag, KoersdagChangedError, putKoersdag } from './lib/koersdagStore'
@@ -265,13 +265,13 @@ export const handler = createHandler({
 
   'GET /lessons': async (req) => {
     await requireOwner(req)
-    return ok({ lessons: await listLessons(req.alias, MAX_LESSONS_LISTED) })
+    return ok({ lessons: await kb.listLessons(req.alias, MAX_LESSONS_LISTED) })
   },
 
   'DELETE /lessons/{id}': async (req) => {
     await requireOwner(req)
     const id = req.params.id ?? ''
-    if (!/^[\w-]{1,80}$/.test(id) || !(await deleteLesson(req.alias, id))) {
+    if (!/^[\w-]{1,80}$/.test(id) || !(await kb.removeLesson(req.alias, id))) {
       throw new HttpError(404, 'Deze les bestaat niet (meer).')
     }
     return ok({ ok: true })

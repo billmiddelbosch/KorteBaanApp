@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kortebaan-kennisbank": {
+      "type": "http",
+      "url": "https://FUNCTION_URL_ID.lambda-url.eu-west-2.on.aws/mcp"
+    }
+  }
+}

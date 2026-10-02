@@ -3,6 +3,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
+import * as dsql from 'aws-cdk-lib/aws-dsql'
 import * as events from 'aws-cdk-lib/aws-events'
 import * as targets from 'aws-cdk-lib/aws-events-targets'
 import * as s3 from 'aws-cdk-lib/aws-s3'
@@ -196,6 +197,9 @@ export class ApiStack extends cdk.Stack {
       TERUGBLIK_WORKER_NAME: terugblikWorkerFn.functionName,
     })
 
+    // OAuth for the kennisbank MCP server: discovery, client registration, consent and tokens
+    const oauthFn = accountFn('OAuthFunction', 'oauth', 'OAuth for the kennisbank MCP server')
+
     const accountFunctions = [
       authFn,
       meFn,
@@ -205,6 +209,7 @@ export class ApiStack extends cdk.Stack {
       aiInstructionFn,
       koersdagFn,
       terugblikFn,
+      oauthFn,
     ]
     for (const fn of accountFunctions) {
       for (const env of envs) {
@@ -264,6 +269,66 @@ export class ApiStack extends cdk.Stack {
         schedule: events.Schedule.cron({ minute: '0', hour: '4' }),
         targets: [new targets.LambdaFunction(kalenderSyncFn.addAlias(env, { retryAttempts: 1 }))],
       })
+    }
+
+    // ── Kennisbank (one Aurora DSQL cluster shared by dev and prod) ──────────
+    // Schema, roles and the IAM mapping of kbIngest are applied with `cd lambda && npm run kb-migrate`.
+    const kbCluster = new dsql.CfnCluster(this, 'KennisbankCluster', {
+      deletionProtectionEnabled: true,
+      tags: [{ key: 'Name', value: `${PROJECT}-kennisbank` }],
+    })
+    kbCluster.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN)
+    const kbHost = `${kbCluster.attrIdentifier}.dsql.${this.region}.on.aws`
+
+    // Adds the results of recent draverijen (kortebaanbond.nl pdf's + weather) to the kennisbank.
+    // Runs once for both environments, so the rule targets the function itself, not an alias.
+    const kbIngestFn = makeFn(
+      'KbIngestFunction',
+      'kbIngest',
+      'kbIngest.handler',
+      'Kennisbank: results of recent draverijen from kortebaanbond.nl',
+      { memorySize: 1024, timeout: cdk.Duration.minutes(5) },
+    )
+    new events.Rule(this, 'KbIngest', {
+      description: 'Daily kennisbank ingest of recent draverijen',
+      schedule: events.Schedule.cron({ minute: '0', hour: '5' }),
+      targets: [new targets.LambdaFunction(kbIngestFn, { retryAttempts: 1 })],
+    })
+
+    // Besides the ingest, the AI workers read the kennisbank and write claims, win chances and
+    // lessons, and the Terugblik API lists and removes lessons; all as kb_writer
+    // The MCP server (Claude Code / claude.ai, behind OAuth): the kennisbank tools as kb_writer and
+    // kb_sql as kb_reader. Checks its OAuth tokens in the table; no session secret needed.
+    const kbMcpFn = makeFn('KbMcpFunction', 'kbMcp', 'kbMcp.handler', 'Kennisbank MCP server (OAuth)', {
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(29),
+      environment: { TABLE_DEV: tables.dev.tableName, TABLE_PROD: tables.prod.tableName },
+    })
+    for (const env of envs) tables[env].grantReadData(kbMcpFn)
+    // Not behind API Gateway (see mcpUrlOf in lambda/src/lib/oauth.ts): a Function URL per alias
+    const kbMcpUrls = Object.fromEntries(
+      envs.map((env) => [
+        env,
+        kbMcpFn.addAlias(env).addFunctionUrl({
+          authType: lambda.FunctionUrlAuthType.NONE, // OAuth bearer tokens, checked in the handler
+          cors: {
+            allowedOrigins: ['*'],
+            allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.POST],
+            allowedHeaders: ['authorization', 'content-type', 'mcp-protocol-version'],
+            exposedHeaders: ['www-authenticate'],
+          },
+        }),
+      ]),
+    ) as Record<(typeof envs)[number], lambda.FunctionUrl>
+    const mcpUrl = (env: (typeof envs)[number]) => cdk.Fn.join('', [kbMcpUrls[env].url, 'mcp'])
+    oauthFn.addEnvironment('KB_MCP_URL_DEV', mcpUrl('dev'))
+    oauthFn.addEnvironment('KB_MCP_URL_PROD', mcpUrl('prod'))
+
+    const kbWriters = [kbIngestFn, analysisWorkerFn, koersdagWorkerFn, terugblikWorkerFn, terugblikFn, kbMcpFn]
+    const kbReaders = [kbMcpFn]
+    for (const fn of new Set([...kbWriters, ...kbReaders])) {
+      fn.addEnvironment('KB_HOST', kbHost)
+      fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['dsql:DbConnect'], resources: [kbCluster.attrResourceArn] }))
     }
 
     const functions = [healthFn, ...accountFunctions]
@@ -347,6 +412,13 @@ export class ApiStack extends cdk.Stack {
       ['PATCH', '/terugblik/{id}/bets/{betId}', terugblikFn],
       ['GET', '/lessons', terugblikFn],
       ['DELETE', '/lessons/{id}', terugblikFn],
+      ['GET', '/.well-known/oauth-protected-resource', oauthFn],
+      ['GET', '/.well-known/oauth-authorization-server', oauthFn],
+      ['GET', '/.well-known/openid-configuration', oauthFn],
+      ['POST', '/oauth/register', oauthFn],
+      ['GET', '/oauth/authorize', oauthFn],
+      ['POST', '/oauth/authorize', oauthFn],
+      ['POST', '/oauth/token', oauthFn],
     ]
     const methods = routes.map(([method, route, fn]) =>
       api.root.resourceForPath(route).addMethod(method, aliasIntegration(fn)),
@@ -383,6 +455,15 @@ export class ApiStack extends cdk.Stack {
       description: 'Prod stage — used by kortebaan.nl (production branch)',
     })
 
+    // The MCP server finds its authorization server by stage URL (built from the API id, not
+    // the Stage, to avoid a dependency cycle)
+    for (const env of envs) {
+      kbMcpFn.addEnvironment(
+        `OAUTH_ISSUER_${env.toUpperCase()}`,
+        `https://${api.restApiId}.execute-api.${this.region}.${this.urlSuffix}/${env}`,
+      )
+    }
+
     // ── Outputs ──────────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'ApiUrlDev', {
       value: devStage.urlForPath('/'),
@@ -391,6 +472,20 @@ export class ApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiUrlProd', {
       value: prodStage.urlForPath('/'),
       description: 'VITE_API_BASE_URL for the Amplify production branch',
+    })
+    new cdk.CfnOutput(this, 'KbEndpoint', { value: kbHost, description: 'Kennisbank DSQL endpoint (--host for kb-migrate/kb-backfill)' })
+    new cdk.CfnOutput(this, 'KbWriterRoleArns', {
+      value: cdk.Fn.join(',', kbWriters.map((fn) => fn.role!.roleArn)),
+      description: '--writer-arn for kb-migrate (all functions that use the kennisbank)',
+    })
+    new cdk.CfnOutput(this, 'KbReaderRoleArns', {
+      value: cdk.Fn.join(',', kbReaders.map((fn) => fn.role!.roleArn)),
+      description: '--reader-arn for kb-migrate (kb_sql of the MCP server)',
+    })
+    new cdk.CfnOutput(this, 'McpUrlDev', { value: mcpUrl('dev'), description: 'Kennisbank MCP server, dev (test via staging)' })
+    new cdk.CfnOutput(this, 'McpUrlProd', {
+      value: mcpUrl('prod'),
+      description: 'Kennisbank MCP server (Claude Code .mcp.json / claude.ai connector)',
     })
   }
 }

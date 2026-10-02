@@ -9,6 +9,7 @@ import type {
   Source,
 } from '@/types/analyse'
 import type { Koersdag, KoersdagToday, KoersdagUpdate, UpdateKind } from '@/types/koersdag'
+import type { OAuthConsent, OAuthScope } from '@/types/oauth'
 import type { OmloopResult, ReviewStep, TerugblikDetail } from '@/types/terugblik'
 import {
   analyseDb,
@@ -17,6 +18,7 @@ import {
   koersdagDb,
   terugblikDb,
   MOCK_DEFAULT_INSTRUCTION,
+  MOCK_OAUTH_CLIENT,
   newLinkToken,
   userForLink,
   userForToken,
@@ -27,7 +29,7 @@ import {
 } from './data'
 
 // Mirrors the Lambda handlers in lambda/src (auth, me, friends, aiConnection, analysis,
-// aiInstruction, koersdag, terugblik):
+// aiInstruction, koersdag, terugblik, oauth):
 // same routes, response shapes and Dutch messages.
 
 const BASE = '/api'
@@ -340,7 +342,8 @@ function saveInstruction(text: string) {
 const KOERSDAG_GONE = 'Deze koersdag bestaat niet (meer).'
 const KOERSDAG_FINISHED = 'Deze koersdag is al afgerond.'
 const MAX_AMOUNT = 10_000
-const MAX_PHOTO_BASE64 = 5_000_000
+const MAX_PHOTO_BASE64 = 5_000_000 // per photo, and all photos of one board together
+const MAX_PHOTOS = 3
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 const euro = (n: number) =>
@@ -404,13 +407,26 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
     changes: [],
     isFinal: false,
   }
-  const pick = (race: string, bet: string, amount: number, reasoning: string, changed = false) => ({
+  // Like parseUpdate: the app computes expected value and break-even quota from chance and quota
+  const pick = (
+    race: string,
+    bet: string,
+    amount: number,
+    reasoning: string,
+    changed = false,
+    chance: number | null = null,
+    odds: number | null = null,
+  ) => ({
     id: nextId('s'),
     race,
     bet,
     amount,
     reasoning,
     changed,
+    chance,
+    odds,
+    expectedValue: chance !== null && odds !== null ? Math.round((chance * odds - 1) * 100) / 100 : null,
+    minOdds: chance !== null ? Math.round((1 / chance) * 100) / 100 : null,
   })
 
   if (kind === 'photo') {
@@ -422,7 +438,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       photoCheck: { matches: false, differences: ['Quota Fleur de Lis 3,2 → 4,1'] },
       adviceNote: 'Zet minder in op Fleur de Lis; de rest blijft staan.',
       advice: [
-        pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 10, 'Nog steeds de sterkste.', true),
+        pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 10, 'Nog steeds de sterkste.', true, 0.35, 4.1),
       ],
     }
   }
@@ -432,7 +448,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       findings: ['De finale is bekend: Ilse van de Heide tegen Hessel B.'],
       verdict: 'kept',
       adviceNote: 'Dit is de finale: de gok op Ilse van de Heide blijft staan.',
-      advice: [pick('Finale', 'Winnaar: Ilse van de Heide', 10, 'Buitenkans met hoge quote.')],
+      advice: [pick('Finale', 'Winnaar: Ilse van de Heide', 10, 'Buitenkans met hoge quote.', false, 0.25, 6)],
       isFinal: true,
     }
   }
@@ -443,7 +459,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       verdict: 'changed',
       changes: ['Nieuw: Hessel B, want zijn sterkste tegenstander is afgemeld.'],
       adviceNote: 'Een kleine extra inzet op Hessel B.',
-      advice: [pick(`${label}, koppel 1`, 'Winnaar: Hessel B', 5, 'Tegenstander afgemeld.', true)],
+      advice: [pick(`${label}, koppel 1`, 'Winnaar: Hessel B', 5, 'Tegenstander afgemeld.', true, 0.6)],
     }
   }
   const hadAdvice =
@@ -456,7 +472,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       ? 'Het vastgelegde advies klopt nog: zet in op Fleur de Lis.'
       : `Eerste advies binnen je budget van ${euro(koersdag.budget)}.`,
     advice: [
-      pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 20, 'Won twee van de laatste drie.'),
+      pick(`${label}, koppel 3`, 'Winnaar: Fleur de Lis', 20, 'Won twee van de laatste drie.', false, 0.4, 3.2),
     ],
   }
 }
@@ -704,6 +720,62 @@ function sumUp(rows: { staked: number; paidOut: number }[]) {
 }
 
 type Body = Record<string, unknown>
+
+// ── OAuth (consent page of the kennisbank MCP server) ──
+
+const OAUTH_SCOPES: Record<OAuthScope, string> = {
+  'kb:read': 'De kennisbank lezen: paarden, pikeurs, koppels, edities, feiten en lessen.',
+  'kb:write': 'Feiten en lessen aan de kennisbank toevoegen.',
+  'kb:sql': 'Eigen leesvragen (SQL) op de kennisbank uitvoeren.',
+}
+
+// Loopback redirects may use any port, like the Lambda
+function oauthRedirectMatches(uri: string): boolean {
+  try {
+    const url = new URL(uri)
+    return MOCK_OAUTH_CLIENT.redirectUris.some((known) => {
+      const k = new URL(known)
+      return (
+        url.protocol === k.protocol && url.hostname === k.hostname && url.pathname === k.pathname
+      )
+    })
+  } catch {
+    return false
+  }
+}
+
+// Checks the client's authorize query; returns the scopes the user gets or an error response
+function checkAuthorize(user: MockUser, q: Record<string, unknown>): OAuthScope[] | Response {
+  if (q.client_id !== MOCK_OAUTH_CLIENT.clientId) {
+    return fail(400, 'Deze app is niet (meer) bekend. Start het koppelen opnieuw vanuit de app.')
+  }
+  if (typeof q.redirect_uri !== 'string' || !oauthRedirectMatches(q.redirect_uri)) {
+    return fail(400, 'De terugkeer-adres van deze app klopt niet. Start het koppelen opnieuw.')
+  }
+  if (q.response_type !== 'code') {
+    return fail(400, 'Deze app vraagt een soort toegang die we niet ondersteunen.')
+  }
+  if (
+    q.code_challenge_method !== 'S256' ||
+    typeof q.code_challenge !== 'string' ||
+    q.code_challenge.length < 43
+  ) {
+    return fail(400, 'Deze app gebruikt geen veilige koppeling (PKCE). Koppelen kan niet.')
+  }
+  const allowed: OAuthScope[] =
+    user.role === 'owner' ? ['kb:read', 'kb:write', 'kb:sql'] : ['kb:read']
+  const asked = typeof q.scope === 'string' && q.scope.trim() ? q.scope.trim().split(/s+/) : allowed
+  const scopes = allowed.filter((s) => asked.includes(s))
+  return scopes.length
+    ? scopes
+    : fail(403, 'Je account heeft geen toegang tot wat deze app vraagt.')
+}
+
+function oauthRedirect(uri: string, values: Record<string, unknown>): string {
+  const url = new URL(uri)
+  for (const [k, v] of Object.entries(values)) if (typeof v === 'string') url.searchParams.set(k, v)
+  return url.toString()
+}
 
 export const handlers = [
   http.get(`${BASE}/health`, async () => {
@@ -1271,21 +1343,32 @@ export const handlers = [
     const { user, entry, error } = koersdagFor(request, params.id)
     if (error) return error
     const body = (await request.json()) as Body
-    if (
-      typeof body.mediaType !== 'string' ||
-      !['image/jpeg', 'image/png', 'image/webp'].includes(body.mediaType)
-    ) {
-      return fail(400, 'Gebruik een foto (JPG, PNG of WebP).')
+    // Several photos of one board as `images`; the older single-photo body still works
+    const list = (Array.isArray(body.images) ? body.images : [body]) as Body[]
+    if (!list.length) return fail(400, 'Maak eerst een foto.')
+    if (list.length > MAX_PHOTOS) return fail(400, `Stuur maximaal ${MAX_PHOTOS} foto's tegelijk.`)
+    let total = 0
+    for (const photo of list) {
+      if (
+        typeof photo?.mediaType !== 'string' ||
+        !['image/jpeg', 'image/png', 'image/webp'].includes(photo.mediaType)
+      ) {
+        return fail(400, 'Gebruik een foto (JPG, PNG of WebP).')
+      }
+      const image = typeof photo.image === 'string' ? photo.image : ''
+      if (!image) return fail(400, 'Maak eerst een foto.')
+      if (image.length > MAX_PHOTO_BASE64) {
+        return fail(
+          413,
+          'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.',
+        )
+      }
+      if (!sniffBase64(image)) return fail(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
+      total += image.length
     }
-    const image = typeof body.image === 'string' ? body.image : ''
-    if (!image) return fail(400, 'Maak eerst een foto.')
-    if (image.length > MAX_PHOTO_BASE64) {
-      return fail(
-        413,
-        'De foto is te groot. Probeer het opnieuw; de app verkleint de foto automatisch.',
-      )
+    if (total > MAX_PHOTO_BASE64) {
+      return fail(413, "De foto's zijn samen te groot. Stuur minder foto's tegelijk.")
     }
-    if (!sniffBase64(image)) return fail(400, 'Dit bestand is geen foto. Probeer het opnieuw.')
     const refused = startUpdate(user, entry, 'photo')
     if (refused) return refused
     return HttpResponse.json(koersdagView(entry), { status: 202 })
@@ -1553,5 +1636,36 @@ export const handlers = [
     if (index < 0) return fail(404, 'Deze les bestaat niet (meer).')
     terugblikDb.lessons.splice(index, 1)
     return HttpResponse.json({ ok: true })
+  }),
+
+  // ── OAuth ─────────────────────────────────────────────────────────────
+
+  http.get(`${BASE}/oauth/authorize`, async ({ request }) => {
+    await delay(LAG)
+    const { user, error } = authenticate(request)
+    if (error) return error
+    const query = Object.fromEntries(new URL(request.url).searchParams)
+    const scopes = checkAuthorize(user, query)
+    if (scopes instanceof Response) return scopes
+    const consent: OAuthConsent = {
+      client: { name: MOCK_OAUTH_CLIENT.name, redirectHost: new URL(query.redirect_uri!).host },
+      scopes: scopes.map((scope) => ({ scope, description: OAUTH_SCOPES[scope] })),
+    }
+    return HttpResponse.json(consent)
+  }),
+
+  http.post(`${BASE}/oauth/authorize`, async ({ request }) => {
+    await delay(LAG)
+    const { user, error } = authenticate(request)
+    if (error) return error
+    const body = (await request.json()) as Body
+    const scopes = checkAuthorize(user, body)
+    if (scopes instanceof Response) return scopes
+    const uri = body.redirect_uri as string
+    const redirectTo =
+      body.approve === true
+        ? oauthRedirect(uri, { code: 'mock-oauth-code', state: body.state })
+        : oauthRedirect(uri, { error: 'access_denied', state: body.state })
+    return HttpResponse.json({ redirectTo })
   }),
 ]

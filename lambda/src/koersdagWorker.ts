@@ -4,21 +4,36 @@ import { DEFAULT_INSTRUCTION } from './lib/analysis'
 import { getAdvice, getInstruction } from './lib/analysisStore'
 import { askClaude, ClaudeError, type ChatImage } from './lib/claude'
 import { aliasOf, type Alias } from './lib/http'
+import * as kb from './lib/kb/service'
 import {
   buildKoersdagPrompt,
+  parseBoard,
+  parseKansen,
   parseUpdate,
+  photosOf,
   UNREADABLE_ERROR,
   type KoersdagRecord,
   type KoersdagUpdate,
 } from './lib/koersdag'
-import { getKoersdag, KoersdagChangedError, putKoersdag } from './lib/koersdagStore'
+import {
+  getKoersdag,
+  KoersdagChangedError,
+  listBoardReadings,
+  putBoardReading,
+  putKoersdag,
+} from './lib/koersdagStore'
 import { deletePhoto, readPhoto } from './lib/photos'
 import { readClaudeToken } from './lib/secrets'
 import { dayOf, getAiConfig, putAiConfig } from './lib/store'
 import type { WorkerJob } from './lib/worker'
+import { zeturfOmlopen } from './lib/zeturf'
 
 // Leave room within the Lambda timeout (5 min) to save the result
 const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000
+// The koersdag is time-critical: few kennisbank rounds
+const KB_TOOL_ROUNDS = 2
+// Room for the whole answer: a board read from several photos plus advice and kansen
+const MAX_TOKENS = 16_000
 
 type Outcome = { update: KoersdagUpdate } | { error: string }
 
@@ -30,6 +45,7 @@ async function save(alias: Alias, job: WorkerJob, outcome: Outcome) {
     if (!latest || latest.status !== 'thinking' || latest.thinkingSince !== job.thinkingSince) return
     const next: KoersdagRecord = {
       ...latest,
+      photos: undefined,
       photoKey: undefined,
       photoMediaType: undefined,
       updatedAt: new Date(Math.max(Date.now(), Date.parse(latest.updatedAt) + 1)).toISOString(),
@@ -57,24 +73,46 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
   const token = await readClaudeToken(alias)
   if (!token) return { error: 'De AI is nog niet gekoppeld. Vraag de eigenaar om de AI-koppeling in te stellen.' }
 
-  const [instruction, advice] = await Promise.all([
+  const today = dayOf()
+  const [instruction, advice, board, zeturf, dossier] = await Promise.all([
     getInstruction(alias),
     getAdvice(alias, record.userId, record.draverij.id),
+    // A missing board only makes the advice less sharp; don't fail the update over it
+    listBoardReadings(alias, record.draverij.id, record.omloop).catch((err) => {
+      console.error(err)
+      return []
+    }),
+    kind === 'fetch' ? zeturfOmlopen(record.draverij) : Promise.resolve(null),
+    kb.dossier(alias, record.draverij, today),
   ])
+  const kbTools = dossier ? await kb.workerTools(alias, record.draverij, 'koersdag', today) : null
   const images: ChatImage[] = []
   if (kind === 'photo') {
-    if (!record.photoKey) return { error: 'De foto is niet aangekomen. Maak de foto opnieuw.' }
-    images.push({ mediaType: (record.photoMediaType ?? 'image/jpeg') as ChatImage['mediaType'], data: await readPhoto(alias, record.photoKey) })
+    const photos = photosOf(record)
+    if (!photos.length) return { error: 'De foto is niet aangekomen. Maak de foto opnieuw.' }
+    const data = await Promise.all(photos.map((p) => readPhoto(alias, p.key)))
+    photos.forEach((p, i) => images.push({ mediaType: p.mediaType as ChatImage['mediaType'], data: data[i]! }))
   }
 
   const { system, text } = buildKoersdagPrompt({
     instruction: instruction?.text ?? DEFAULT_INSTRUCTION,
     record,
     advice,
-    today: dayOf(),
+    today,
     kind,
+    board,
+    zeturf,
+    kennisbank: dossier,
+    photoCount: images.length,
   })
-  const reply = await askClaude(token, { system, turns: [{ role: 'user', text, images }], timeoutMs: CLAUDE_TIMEOUT_MS })
+  const reply = await askClaude(token, {
+    system,
+    turns: [{ role: 'user', text, images }],
+    timeoutMs: CLAUDE_TIMEOUT_MS,
+    webFetch: kind === 'fetch',
+    maxTokens: MAX_TOKENS,
+    ...(kbTools ? { ...kbTools, maxToolRounds: KB_TOOL_ROUNDS } : {}),
+  })
 
   const update = parseUpdate(reply.text, {
     id: `u-${randomUUID()}`,
@@ -89,6 +127,23 @@ async function run(alias: Alias, job: WorkerJob, record: KoersdagRecord): Promis
     console.error('Unparseable koersdag reply', reply.text.slice(0, 1000))
     return { error: UNREADABLE_ERROR }
   }
+
+  // Share what was read from the board with everyone on this koersdag
+  const reading = kind === 'photo' ? parseBoard(reply.text) : null
+  if (reading) {
+    await putBoardReading(alias, record.draverij.id, {
+      id: randomUUID(),
+      omloop: record.omloop,
+      userId: record.userId,
+      readAt: new Date().toISOString(),
+      ...reading,
+    }).catch(console.error)
+  }
+
+  // Win chances per koppel go into the kennisbank, to be scored against the result
+  const kansen = parseKansen(reply.text, record.omloop)
+  if (kansen.length) await kb.recordKoersdag(alias, record.draverij.id, kansen, update.id)
+
   return { update }
 }
 
@@ -112,6 +167,6 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
     }
   }
 
-  if (record.photoKey) await deletePhoto(alias, record.photoKey).catch(console.error)
+  await Promise.all(photosOf(record).map((p) => deletePhoto(alias, p.key).catch(console.error)))
   await save(alias, job, outcome).catch(console.error)
 }

@@ -149,38 +149,62 @@ export const kickoffText = (d: Draverij) =>
 
 // ── Prompt ───────────────────────────────────────────────────────────────
 
-// The fixed app part: output format for advice and facts, the chosen koers and the kennisbank.
+// The kennisbank as a source in the system prompt. undefined: no kennisbank configured (tests,
+// local runs); null: configured but unreachable, which the reasoning has to mention.
+// The koersdag gets few tool rounds, so it is asked to batch its kennisbank calls.
+export function kennisbankSection(kennisbank: string | null | undefined, tools: 'analysis' | 'koersdag' | false): string {
+  if (kennisbank === undefined) return ''
+  if (kennisbank === null) {
+    return `
+## Kennisbank
+De kennisbank is nu niet bereikbaar. Baseer je op actuele online bronnen en vermeld in je onderbouwing dat historische kennisbankdata ontbrak.
+`
+  }
+  if (tools === 'koersdag') {
+    return `
+${kennisbank}
+
+## Werken met de kennisbank
+- De kennisbank is één bron naast wat je vandaag ziet (ZEturf, bordfoto's, nieuws). Maak in je onderbouwing zichtbaar wat uit de kennisbank komt en wat van vandaag, en benoem waar ze verschillen.
+- Een les met "[les …]" is een eerdere interpretatie, geen wet; weeg de zekerheid mee.
+- Het dossier hierboven is meestal genoeg. Gebruik de kb_-tools alleen voor paarden of koppels die er niet in staan, en pas als je de loting kent.
+- Roep alles wat je nodig hebt in één beurt tegelijk aan: kb_matchups met alle koppels van deze omloop in één aanroep, kb_field met alle onbekende paarden in één aanroep. Je krijgt maar weinig rondes tools; daarna moet je meteen antwoorden.
+`
+  }
+  return `
+${kennisbank}
+
+## Werken met de kennisbank
+- De kennisbank is één bron naast je eigen actuele zoektocht; zoek altijd online naar het nieuws van vandaag (afmeldingen, loting, baanstaat, vorm), ook als de kennisbank compleet lijkt.
+- Maak in je onderbouwing zichtbaar wat uit de kennisbank komt en wat van vandaag, en benoem waar ze verschillen.
+- Een les met "[les …]" is een eerdere interpretatie, geen wet; weeg de zekerheid mee.${
+    tools
+      ? `
+- Met de kb_-tools haal je profielen van paarden en pikeurs, onderlinge duels en eerdere edities op. Gebruik ze zodra je de deelnemers of koppels kent.
+- Nieuwe, controleerbare feiten die je online vindt (blessure, afmelding, pikeurwissel, vorm) leg je vast met kb_record_claim, met de bron-URL.`
+      : ''
+  }
+`
+}
+
+// The fixed app part: output format for advice, the chosen koers and the kennisbank.
 // The owner edits only the instruction; this part keeps the app able to read the replies.
 export function buildSystemPrompt(input: {
   instruction: string
   draverij: Draverij
   today: string
-  facts: KnowledgeFact[]
-  lessons: Lesson[]
+  kennisbank?: string | null
 }): string {
-  const { draverij, facts, lessons } = input
-  const knowledge = [
-    lessons.length
-      ? `Lessen uit eerdere adviezen (aanvullend, vervangen je eigen actuele analyse niet):\n${lessons.map((l) => `- ${l.text}`).join('\n')}`
-      : '',
-    facts.length
-      ? `Eerder gevonden feiten uit de gedeelde kennisbank (controleer of ze nog actueel zijn):\n${facts.map((f) => `- ${f.text}`).join('\n')}`
-      : '',
-  ].filter(Boolean)
-
+  const { draverij } = input
   return `${input.instruction.trim()}
 
 ## Context van de app
 Vandaag is het ${formatDutchDate(input.today)}. De gebruiker wil een inzetadvies voor de kortebaandraverij in ${draverij.place} op ${formatDutchDate(draverij.date)}.
-${knowledge.length ? `\n${knowledge.join('\n\n')}\n` : ''}
+${kennisbankSection(input.kennisbank, 'analysis')}
 ## Vorm van je antwoorden
 Als je een inzetadvies voorstelt, sluit je bericht af met precies één blok in deze vorm (geldige JSON, bedragen in euro's of null):
 <advies>{"samenvatting": "…", "budget": 50, "keuzes": [{"koers": "1e omloop, koppel 3", "inzet": "Winnaar: …", "bedrag": 10, "onderbouwing": "…"}]}</advies>
-De app toont dit blok als kaart met een knop om het advies vast te leggen; herhaal de inhoud niet uitgebreid in je tekst.
-
-Als je online bruikbare, controleerbare feiten vindt (uitslagen, vorm, blessures, pikeurwissels), zet ze aan het eind in:
-<feiten>["Feit met plaats en datum", "…"]</feiten>
-Die gaan naar de gedeelde kennisbank. Alleen feiten, geen meningen of voorspellingen.`
+De app toont dit blok als kaart met een knop om het advies vast te leggen; herhaal de inhoud niet uitgebreid in je tekst.`
 }
 
 // ── Parsing replies ──────────────────────────────────────────────────────
