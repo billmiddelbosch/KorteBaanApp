@@ -75,6 +75,11 @@ test.describe('Koersdag', () => {
     await expect(page.getByText('Nieuw: Hessel B', { exact: false })).toBeVisible(AI_TIMEOUT)
     // Without a board quota: from which quota the bet is worth it
     await expect(page.getByText('Kans 60% · zinvol vanaf quota 1,67')).toBeVisible()
+    // The advice as a whole: total stake and expected profit over the picks with a quota
+    const total = page.getByTestId('advice-totals')
+    await expect(total.getByText('€ 10,00')).toBeVisible()
+    await expect(total.getByText('+€ 1,30')).toBeVisible()
+    await expect(total.getByText('1 keuze zonder quota niet meegeteld.')).toBeVisible()
 
     await page.getByRole('button', { name: 'Volgende omloop' }).click()
     await expect(page.getByRole('heading', { name: '3e omloop' })).toBeVisible()

@@ -233,6 +233,27 @@ describe('koersdag prompt', () => {
     expect(system).toContain('vanaf welke quota')
   })
 
+  it('asks to judge the advice as a whole and not to chase losses', () => {
+    const { system } = prompt('fetch')
+    expect(system).toContain('Beoordeel de keuzes ook als geheel')
+    expect(system).toContain('meer uitbetaalt dan de totale inzet op die koers')
+    expect(system).toContain('Jaag verlies niet na')
+    expect(system).toMatch(/Resultaat van de afgerekende inzetten: nog geen\. Nog niet afgerekend: €\s0,00\./)
+  })
+
+  it('shares the result of the settled bets and what is still open', () => {
+    const bet = (amount: number, winnings: number | null) => ({ id: 'b', omloop: 1, suggestionId: null, bet: 'x', amount, winnings, createdAt: '' })
+    const { system } = buildKoersdagPrompt({
+      instruction: 'x',
+      record: { ...record, bets: [bet(20, 0), bet(10, 15), bet(5, null)] },
+      advice: undefined,
+      today: '2026-09-23',
+      kind: 'fetch',
+      board: [],
+    })
+    expect(system).toMatch(/Resultaat van de afgerekende inzetten: −€\s15,00\. Nog niet afgerekend: €\s5,00\./)
+  })
+
   it('puts the kennisbank before the quotabord and asks for win chances per koppel', () => {
     const { system } = prompt('fetch', { kennisbank: '## Kennisbank (stand 2026-09-22)' })
     expect(system).toContain('## Kennisbank (stand 2026-09-22)')

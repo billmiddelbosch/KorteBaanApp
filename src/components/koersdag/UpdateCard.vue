@@ -2,7 +2,8 @@
 import { computed, ref } from 'vue'
 import { Camera, CircleAlert, CircleCheck, Globe, RefreshCw, Sparkles, TriangleAlert } from '@lucide/vue'
 import AlertBox from '@/components/account/AlertBox.vue'
-import { formatEuro, parseEuro } from '@/lib/format'
+import { adviceTotals } from '@/lib/adviceTotals'
+import { balanceClass, formatBalance, formatEuro, parseEuro } from '@/lib/format'
 import { ui } from '@/lib/ui'
 import type { Bet, KoersdagUpdate, Suggestion } from '@/types/koersdag'
 
@@ -38,6 +39,13 @@ const verdict = computed(
         style: 'bg-amber-50 text-amber-900 dark:bg-amber-400/10 dark:text-amber-100',
       },
     })[props.update.verdict],
+)
+
+// The advice as a whole; only worth a line with more than one pick
+const totals = computed(() =>
+  props.update.advice.filter((s) => s.amount !== null).length > 1
+    ? adviceTotals(props.update.advice)
+    : null,
 )
 
 const betFor = (suggestion: Suggestion) => props.bets.find((b) => b.suggestionId === suggestion.id)
@@ -229,6 +237,29 @@ function confirmBet(suggestion: Suggestion) {
           </template>
         </li>
       </ul>
+      <div
+        v-if="totals"
+        class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-white/10 dark:bg-slate-800"
+        data-testid="advice-totals"
+      >
+        <p class="flex items-baseline justify-between gap-3 font-semibold text-slate-900 dark:text-slate-100">
+          <span>Totaal advies</span>
+          <span class="tabular-nums">{{ formatEuro(totals.stake) }}</span>
+        </p>
+        <p
+          v-if="totals.expectedProfit !== null"
+          class="mt-0.5 flex items-baseline justify-between gap-3 font-medium"
+        >
+          <span class="text-slate-700 dark:text-slate-300">Verwachte winst</span>
+          <span :class="['tabular-nums', balanceClass(totals.expectedProfit)]">
+            {{ formatBalance(totals.expectedProfit) }}
+          </span>
+        </p>
+        <p v-if="totals.withoutOdds" class="mt-0.5 text-slate-600 dark:text-slate-400">
+          {{ totals.withoutOdds === 1 ? '1 keuze' : `${totals.withoutOdds} keuzes` }} zonder quota niet
+          meegeteld.
+        </p>
+      </div>
       <AlertBox v-if="error">{{ error }}</AlertBox>
     </section>
 

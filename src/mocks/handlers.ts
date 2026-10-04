@@ -459,7 +459,10 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
       verdict: 'changed',
       changes: ['Nieuw: Hessel B, want zijn sterkste tegenstander is afgemeld.'],
       adviceNote: 'Een kleine extra inzet op Hessel B.',
-      advice: [pick(`${label}, koppel 1`, 'Winnaar: Hessel B', 5, 'Tegenstander afgemeld.', true, 0.6)],
+      advice: [
+        pick(`${label}, koppel 1`, 'Winnaar: Hessel B', 5, 'Tegenstander afgemeld.', true, 0.6),
+        pick(`${label}, koppel 4`, 'Winnaar: Gerrit de Vries', 5, 'Quota hoger dan zijn kans.', false, 0.3, 4.2),
+      ],
     }
   }
   const hadAdvice =
