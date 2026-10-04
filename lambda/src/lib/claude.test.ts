@@ -108,6 +108,18 @@ describe('askClaude with own tools', () => {
   })
 })
 
+describe('askClaude truncation', () => {
+  it('flags a reply cut off by the output limit', async () => {
+    stubApi([{ content: [{ type: 'text', text: 'Half antwoord <advies>{' }], stop_reason: 'max_tokens' }])
+    expect(await askClaude('token', ask)).toMatchObject({ text: 'Half antwoord <advies>{', truncated: true })
+  })
+
+  it('does not flag a complete reply', async () => {
+    stubApi([{ content: [{ type: 'text', text: 'Klaar.' }], stop_reason: 'end_turn' }])
+    expect((await askClaude('token', ask)).truncated).toBe(false)
+  })
+})
+
 describe('askClaude without text in the reply', () => {
   it('says the answer got too long when the output limit is reached without text', async () => {
     const bodies = stubApi([{ content: [{ type: 'thinking', thinking: '…' }], stop_reason: 'max_tokens' }])
