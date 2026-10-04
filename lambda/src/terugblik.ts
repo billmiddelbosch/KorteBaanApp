@@ -265,7 +265,19 @@ export const handler = createHandler({
 
   'GET /lessons': async (req) => {
     await requireOwner(req)
-    return ok({ lessons: await kb.listLessons(req.alias, MAX_LESSONS_LISTED) })
+    // Only test lessons can move to production
+    return ok({ lessons: await kb.listLessons(req.alias, MAX_LESSONS_LISTED), canPromote: req.alias === 'dev' })
+  },
+
+  // Moves a test lesson to production; it then leaves this list
+  'POST /lessons/{id}/promote': async (req) => {
+    await requireOwner(req)
+    if (req.alias !== 'dev') throw new HttpError(409, 'Alleen lessen uit de testomgeving kunnen naar productie.')
+    const id = req.params.id ?? ''
+    if (!/^[\w-]{1,80}$/.test(id) || !(await kb.promoteLesson(id))) {
+      throw new HttpError(404, 'Deze les bestaat niet (meer).')
+    }
+    return ok({ ok: true })
   },
 
   'DELETE /lessons/{id}': async (req) => {

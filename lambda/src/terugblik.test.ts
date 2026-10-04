@@ -80,6 +80,12 @@ vi.mock('./lib/kb/service', async () => ({
     db.lessons.splice(index, 1)
     return true
   },
+  promoteLesson: async (id: string) => {
+    const index = db.lessons.findIndex((l) => l.id === id)
+    if (index < 0) return false
+    db.lessons.splice(index, 1)
+    return true
+  },
 }))
 
 vi.mock('./lib/koersdagStore', async (importOriginal) => {
@@ -106,11 +112,12 @@ const { askClaude } = await import('./lib/claude')
 const context = {
   invokedFunctionArn: 'arn:aws:lambda:eu-west-2:123456789012:function:kortebaan-x:dev',
 } as Context
+const prodContext = { invokedFunctionArn: 'arn:aws:lambda:eu-west-2:123456789012:function:kortebaan-x:prod' } as Context
 
 function call(
   method: string,
   resource: string,
-  opts: { body?: unknown; params?: Record<string, string>; as?: UserRecord } = {},
+  opts: { body?: unknown; params?: Record<string, string>; as?: UserRecord; prod?: boolean } = {},
 ) {
   const headers: Record<string, string> = { origin: 'http://localhost:5173' }
   if (opts.as) {
@@ -123,7 +130,7 @@ function call(
     pathParameters: opts.params ?? null,
     body: opts.body === undefined ? null : JSON.stringify(opts.body),
   } as unknown as APIGatewayProxyEvent
-  return terugblik(event, context).then((res) => ({ status: res.statusCode, body: JSON.parse(res.body) }))
+  return terugblik(event, opts.prod ? prodContext : context).then((res) => ({ status: res.statusCode, body: JSON.parse(res.body) }))
 }
 
 const runWorker = async () => {
@@ -352,5 +359,17 @@ describe('owner', () => {
     expect((await call('DELETE', '/lessons/{id}', { as: user, params: { id: 'l-1' } })).status).toBe(200)
     expect(db.lessons).toEqual([])
     expect((await call('DELETE', '/lessons/{id}', { as: user, params: { id: 'l-1' } })).status).toBe(404)
+  })
+
+  it('moves a test lesson to production, only from test', async () => {
+    db.lessons.push({ id: 'l-1', tekst: 'Les', createdAt: '2026-08-15T19:00:00.000Z', draverijId: ID, baan: 'Wolvega' })
+    expect((await call('GET', '/lessons', { as: user })).body.canPromote).toBe(true)
+    expect((await call('GET', '/lessons', { as: user, prod: true })).body.canPromote).toBe(false)
+    expect((await call('POST', '/lessons/{id}/promote', { as: friend, params: { id: 'l-1' } })).status).toBe(403)
+    const fromProd = await call('POST', '/lessons/{id}/promote', { as: user, params: { id: 'l-1' }, prod: true })
+    expect(fromProd).toEqual({ status: 409, body: { message: 'Alleen lessen uit de testomgeving kunnen naar productie.' } })
+    expect((await call('POST', '/lessons/{id}/promote', { as: user, params: { id: 'l-1' } })).status).toBe(200)
+    expect(db.lessons).toEqual([])
+    expect((await call('POST', '/lessons/{id}/promote', { as: user, params: { id: 'l-1' } })).status).toBe(404)
   })
 })

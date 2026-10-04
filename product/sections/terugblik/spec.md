@@ -10,6 +10,7 @@ Na een koersdag zie je hoe het ging: de AI haalt de uitslagen op, jij bevestigt 
 - Speler rondt open inzetten af (uitbetaling invullen) of corrigeert een bedrag → saldo werkt direct mee
 - Eigenaar opent tabblad "Overzicht" → totalen per vriend (inzet, uitbetaling, saldo) en daaronder een lijst van koersdagen met per gebruiker inzet, uitbetaling en saldo; filter per vriend
 - Eigenaar opent tabblad "Lessen" → vastgelegde lessen (tekst, datum, bron-koersdag) → verwijdert een onjuiste les na bevestiging, zodat de AI hem niet meer gebruikt
+- Eigenaar op de testomgeving zet een goede les na bevestiging "Naar productie" → de les krijgt origin `prod`, productie gebruikt hem vanaf dan en hij verdwijnt uit de testlijst (test leest hem nog wel mee). Productie toont deze knop niet
 
 ## UI Requirements
 - Winst en verlies onderscheiden via teken (+/−), kleur én tekst; verlies zonder drama
