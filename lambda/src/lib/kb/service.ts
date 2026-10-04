@@ -128,3 +128,8 @@ export async function removeLesson(alias: Env, id: string): Promise<boolean> {
   if (!kbConfigured()) return false
   return write.removeLesson(await client(), alias, id)
 }
+
+export async function promoteLesson(id: string): Promise<boolean> {
+  if (!kbConfigured()) return false
+  return write.promoteLesson(await client(), id)
+}

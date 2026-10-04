@@ -412,6 +412,7 @@ export class ApiStack extends cdk.Stack {
       ['PATCH', '/terugblik/{id}/bets/{betId}', terugblikFn],
       ['GET', '/lessons', terugblikFn],
       ['DELETE', '/lessons/{id}', terugblikFn],
+      ['POST', '/lessons/{id}/promote', terugblikFn],
       ['GET', '/.well-known/oauth-protected-resource', oauthFn],
       ['GET', '/.well-known/oauth-authorization-server', oauthFn],
       ['GET', '/.well-known/openid-configuration', oauthFn],

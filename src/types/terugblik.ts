@@ -90,3 +90,9 @@ export interface Lesson {
   place?: string
   date?: string
 }
+
+export interface LessonList {
+  lessons: Lesson[]
+  // True on test: its lessons can move to production
+  canPromote: boolean
+}
