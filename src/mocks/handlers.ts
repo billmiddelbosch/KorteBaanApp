@@ -1625,7 +1625,22 @@ export const handlers = [
     await delay(LAG)
     const { error } = requireOwner(request)
     if (error) return error
-    return HttpResponse.json({ lessons: structuredClone(terugblikDb.lessons) })
+    // The mock plays the test environment, so its lessons can move to production
+    return HttpResponse.json({
+      lessons: structuredClone(terugblikDb.lessons),
+      canPromote: true,
+    })
+  }),
+
+  // A promoted lesson leaves the test list
+  http.post(`${BASE}/lessons/:id/promote`, async ({ params, request }) => {
+    await delay(LAG)
+    const { error } = requireOwner(request)
+    if (error) return error
+    const index = terugblikDb.lessons.findIndex((l) => l.id === params.id)
+    if (index < 0) return fail(404, 'Deze les bestaat niet (meer).')
+    terugblikDb.lessons.splice(index, 1)
+    return HttpResponse.json({ ok: true })
   }),
 
   http.delete(`${BASE}/lessons/:id`, async ({ params, request }) => {

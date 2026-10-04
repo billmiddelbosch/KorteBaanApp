@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ChevronRight, CircleCheck, Trash2 } from '@lucide/vue'
+import { ArrowUpFromLine, ChevronRight, CircleCheck, Trash2 } from '@lucide/vue'
 import AlertBox from '@/components/account/AlertBox.vue'
 import ConfirmDialog from '@/components/account/ConfirmDialog.vue'
 import { useLessons, useTerugblikList, useTerugblikOverview } from '@/composables/useTerugblik'
@@ -70,6 +70,30 @@ async function confirmDelete() {
     deleteError.value = errorMessage(error)
   } finally {
     deleting.value = false
+  }
+}
+
+// ── Lessen (test only): move to production after confirmation ──
+const toPromote = ref<Lesson | null>(null)
+const promoting = ref(false)
+const promoteError = ref<string | null>(null)
+
+function askPromote(lesson: Lesson) {
+  promoteError.value = null
+  toPromote.value = lesson
+}
+
+async function confirmPromote() {
+  if (!toPromote.value) return
+  promoting.value = true
+  promoteError.value = null
+  try {
+    await lessons.promote(toPromote.value.id)
+    toPromote.value = null
+  } catch (error) {
+    promoteError.value = errorMessage(error)
+  } finally {
+    promoting.value = false
   }
 }
 
@@ -324,12 +348,16 @@ const rowClass =
             Verwijder een les die niet klopt.
           </p>
         </div>
-        <p v-if="!lessons.data.value?.length" :class="ui.muted">
+        <p v-if="lessons.canPromote.value" :class="ui.muted">
+          Dit zijn de lessen van de testomgeving; productie gebruikt ze niet. Zet een goede les naar
+          productie.
+        </p>
+        <p v-if="!lessons.list.value.length" :class="ui.muted">
           Nog geen lessen. Ze verschijnen hier zodra een koersdag is geëvalueerd.
         </p>
         <ul v-else class="flex flex-col divide-y divide-slate-200 dark:divide-white/10">
           <li
-            v-for="lesson in lessons.data.value"
+            v-for="lesson in lessons.list.value"
             :key="lesson.id"
             class="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"
           >
@@ -340,14 +368,26 @@ const rowClass =
                 {{ formatDate(lesson.date ?? lesson.createdAt) }}
               </p>
             </div>
-            <button
-              type="button"
-              :class="[ui.btnGhost, 'size-11 shrink-0 px-0']"
-              :aria-label="`Les verwijderen: ${lesson.text}`"
-              @click="askDelete(lesson)"
-            >
-              <Trash2 class="size-4" aria-hidden="true" />
-            </button>
+            <div class="flex shrink-0">
+              <button
+                v-if="lessons.canPromote.value"
+                type="button"
+                :class="[ui.btnGhost, 'size-11 px-0']"
+                :aria-label="`Naar productie: ${lesson.text}`"
+                title="Naar productie"
+                @click="askPromote(lesson)"
+              >
+                <ArrowUpFromLine class="size-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                :class="[ui.btnGhost, 'size-11 px-0']"
+                :aria-label="`Les verwijderen: ${lesson.text}`"
+                @click="askDelete(lesson)"
+              >
+                <Trash2 class="size-4" aria-hidden="true" />
+              </button>
+            </div>
           </li>
         </ul>
       </section>
@@ -366,6 +406,23 @@ const rowClass =
       <p>De AI gebruikt deze les daarna niet meer:</p>
       <p class="mt-2 font-medium">{{ toDelete?.text }}</p>
       <AlertBox v-if="deleteError" class="mt-3">{{ deleteError }}</AlertBox>
+    </ConfirmDialog>
+
+    <ConfirmDialog
+      :open="!!toPromote"
+      title="Les naar productie?"
+      confirm-label="Naar productie"
+      cancel-label="Annuleren"
+      :busy="promoting"
+      @confirm="confirmPromote"
+      @cancel="toPromote = null"
+    >
+      <p>
+        Productie gebruikt deze les vanaf nu bij analyses. Hij verdwijnt uit deze lijst; beheren doe
+        je daarna in productie.
+      </p>
+      <p class="mt-2 font-medium">{{ toPromote?.text }}</p>
+      <AlertBox v-if="promoteError" class="mt-3">{{ promoteError }}</AlertBox>
     </ConfirmDialog>
   </div>
 </template>
