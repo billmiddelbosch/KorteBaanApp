@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decayed, formatClaims, formatHorse, formatLessons, formatScorecard, formatSides } from './dossier'
+import { decayed, formatClaims, formatHorse, formatLessons, formatScorecard, formatSides, formatTrackRecord } from './dossier'
 import type { ClaimRow } from './queries'
 
 const claim = (text: string, observedAt: string, confidence = 0.8): ClaimRow => ({
@@ -56,5 +56,14 @@ describe('dossier formatting', () => {
     })!
     expect(text).toContain('AI 0,19, rating 0,22, tote onbekend')
     expect(text).toContain('Omloop 1: Fleur kreeg 70% tegen Hessel en verloor.')
+  })
+
+  it('tells the AI to stay near the board until it has beaten the tote', () => {
+    expect(formatTrackRecord(null)).toContain('nog niet getoetst')
+    const few = formatTrackRecord({ koppels: 12, ai: 0.2, tote: 0.22 })
+    expect(few).toContain('getoetst op 12 koppels met bekende quota: Brier 0,2, de tote 0,22')
+    expect(few).toContain('te weinig')
+    expect(formatTrackRecord({ koppels: 80, ai: 0.23, tote: 0.21 })).toContain('De tote voorspelt beter dan jij')
+    expect(formatTrackRecord({ koppels: 80, ai: 0.19, tote: 0.21 })).toContain('afwijken van het bord is verdedigbaar')
   })
 })

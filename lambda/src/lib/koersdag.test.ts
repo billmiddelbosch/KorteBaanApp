@@ -79,8 +79,8 @@ describe('parseUpdate', () => {
       }),
       meta(),
     )
-    expect(update?.advice[0]).toMatchObject({ chance: 0.4, odds: 3.2, expectedValue: 0.28, minOdds: 2.5 })
-    expect(update?.advice[1]).toMatchObject({ chance: 0.5, odds: null, expectedValue: null, minOdds: 2 })
+    expect(update?.advice[0]).toMatchObject({ chance: 0.4, odds: 3.2, expectedValue: 0.28, minOdds: 2.75 })
+    expect(update?.advice[1]).toMatchObject({ chance: 0.5, odds: null, expectedValue: null, minOdds: 2.2 })
     expect(update?.advice[2]).toMatchObject({ chance: null, odds: null, expectedValue: null, minOdds: null })
   })
 
@@ -230,7 +230,15 @@ describe('koersdag prompt', () => {
     const { system } = prompt('fetch')
     expect(system).toContain('"kans": 0.45, "quota": 3.1')
     expect(system).toContain('kans × quota minstens 1,1')
-    expect(system).toContain('vanaf welke quota')
+    expect(system).toContain('drempelquota met de marge erin (1,1 / kans)')
+    expect(system).toContain('Alleen inzetten bij quota ≥')
+    expect(system).toContain('"anders …"')
+  })
+
+  it('asks to name clearly overplayed horses as Niet doen in the findings', () => {
+    const { system } = prompt('fetch')
+    expect(system).toContain('"Niet doen: <paard> op <quota>, <reden in een paar woorden>"')
+    expect(system).toContain('een lage quota alleen is geen reden')
   })
 
   it('asks to judge the advice as a whole and not to chase losses', () => {

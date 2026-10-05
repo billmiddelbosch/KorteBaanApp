@@ -45,7 +45,7 @@ test.describe('Koersdag', () => {
     // Mark the advice as placed; the amount is prefilled from the suggestion
     const advice = page.getByRole('region', { name: 'Advies' })
     // Chance and board quota give the expected value per euro
-    await expect(advice.getByText('Kans 40% · quota 3,2 · verwachting +28%')).toBeVisible()
+    await expect(advice.getByText('Kans 40% · quota 3,2 · verwachting +28% · alleen inzetten bij quota ≥ 2,75')).toBeVisible()
     await advice.getByRole('button', { name: 'Ingezet' }).click()
     await expect(advice.getByLabel('Hoeveel heb je ingezet?')).toHaveValue('20')
     await advice.getByRole('button', { name: 'Opslaan' }).click()
@@ -73,8 +73,8 @@ test.describe('Koersdag', () => {
     await page.getByRole('button', { name: 'Volgende omloop' }).click()
     await expect(page.getByRole('heading', { name: '2e omloop' })).toBeVisible()
     await expect(page.getByText('Nieuw: Hessel B', { exact: false })).toBeVisible(AI_TIMEOUT)
-    // Without a board quota: from which quota the bet is worth it
-    await expect(page.getByText('Kans 60% · zinvol vanaf quota 1,67')).toBeVisible()
+    // Without a board quota: the threshold quota, margin included
+    await expect(page.getByText('Kans 60% · alleen inzetten bij quota ≥ 1,83')).toBeVisible()
     // The advice as a whole: total stake and expected profit over the picks with a quota
     const total = page.getByTestId('advice-totals')
     await expect(total.getByText('€ 10,00')).toBeVisible()

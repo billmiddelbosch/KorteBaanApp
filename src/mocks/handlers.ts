@@ -426,7 +426,7 @@ function mockUpdate(entry: MockKoersdag, kind: UpdateKind): KoersdagUpdate | { e
     chance,
     odds,
     expectedValue: chance !== null && odds !== null ? Math.round((chance * odds - 1) * 100) / 100 : null,
-    minOdds: chance !== null ? Math.round((1 / chance) * 100) / 100 : null,
+    minOdds: chance !== null ? Math.round((1.1 / chance) * 100) / 100 : null,
   })
 
   if (kind === 'photo') {

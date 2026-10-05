@@ -53,15 +53,16 @@ const betFor = (suggestion: Suggestion) => props.bets.find((b) => b.suggestionId
 const decimal = (n: number) => n.toLocaleString('nl-NL', { maximumFractionDigits: 2 })
 const percent = (n: number) => `${Math.round(n * 100)}%`
 
-// "Kans 40% · quota 3,2 · verwachting +28%", or the break-even quota when the board is unknown
+// "Kans 40% · quota 3,2 · verwachting +28% · alleen inzetten bij quota ≥ 2,75"; the threshold also without a board quota
 function valueLine(s: Suggestion): { text: string; positive: boolean | null } | null {
   if (s.chance == null) return null
   const parts = [`Kans ${percent(s.chance)}`]
   if (s.odds != null && s.expectedValue != null) {
     parts.push(`quota ${decimal(s.odds)}`, `verwachting ${s.expectedValue > 0 ? '+' : ''}${percent(s.expectedValue)}`)
+    if (s.minOdds != null) parts.push(`alleen inzetten bij quota ≥ ${decimal(s.minOdds)}`)
     return { text: parts.join(' · '), positive: s.expectedValue > 0 }
   }
-  if (s.minOdds != null) parts.push(`zinvol vanaf quota ${decimal(s.minOdds)}`)
+  if (s.minOdds != null) parts.push(`alleen inzetten bij quota ≥ ${decimal(s.minOdds)}`)
   return { text: parts.join(' · '), positive: null }
 }
 
