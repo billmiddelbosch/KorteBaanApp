@@ -211,6 +211,11 @@ De app toont dit blok als kaart met een knop om het advies vast te leggen; herha
 
 const ADVICE_RE = /<advies>([\s\S]*?)<\/advies>/i
 const FACTS_RE = /<feiten>([\s\S]*?)<\/feiten>/i
+// A block cut off before its closing tag: drop it and everything after it
+const UNCLOSED_RE = /<(advies|feiten)>(?![\s\S]*<\/\1>)[\s\S]*$/i
+
+export const TRUNCATED_NOTE =
+  '_Het antwoord werd te lang en is afgebroken. Vraag het advies opnieuw, eventueel korter._'
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 const amount = (v: unknown) =>
@@ -264,9 +269,15 @@ export function parseReply(raw: string): ParsedReply {
   const text = raw
     .replace(ADVICE_RE, '')
     .replace(FACTS_RE, '')
+    .replace(UNCLOSED_RE, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
   return { text, proposal, facts }
+}
+
+// A reply cut off by the output limit: drop the unfinished block and say so
+export function markTruncated(raw: string): string {
+  return `${raw.replace(UNCLOSED_RE, '').trim()}\n\n${TRUNCATED_NOTE}`
 }
 
 // ── Views sent to the app ────────────────────────────────────────────────

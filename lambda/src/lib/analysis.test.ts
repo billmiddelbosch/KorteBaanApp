@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   STALE_ERROR,
   THINKING_STALE_MS,
+  TRUNCATED_NOTE,
   buildSystemPrompt,
   draverijOf,
   effectiveStatus,
   isValidDate,
+  markTruncated,
   parseReply,
   slugify,
   type ChatRecord,
@@ -40,6 +42,20 @@ describe('parseReply', () => {
     const broken = parseReply('Tekst <advies>{kapot</advies>')
     expect(broken.proposal).toBeNull()
     expect(broken.text).toBe('Tekst')
+  })
+
+  it('hides an advice block that was cut off before its closing tag', () => {
+    const cut = parseReply('Mijn advies.\n\n<advies>{"samenvatting": "Voorlopig", "keuzes": [{"inzet":')
+    expect(cut).toEqual({ text: 'Mijn advies.', proposal: null, facts: [] })
+    // A complete advice block followed by a cut-off facts block keeps the advice
+    const facts = parseReply(`Tekst <advies>${JSON.stringify(advice)}</advies> <feiten>["Fleur`)
+    expect(facts.text).toBe('Tekst')
+    expect(facts.proposal?.picks).toHaveLength(1)
+  })
+
+  it('marks a truncated reply and drops its unfinished block', () => {
+    expect(markTruncated('Mijn advies.\n<advies>{"keuzes": [')).toBe(`Mijn advies.\n\n${TRUNCATED_NOTE}`)
+    expect(parseReply(markTruncated('Mijn advies.\n<advies>{"keuzes": [')).text).toBe(`Mijn advies.\n\n${TRUNCATED_NOTE}`)
   })
 
   it('leaves plain replies alone', () => {

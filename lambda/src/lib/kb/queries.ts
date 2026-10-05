@@ -412,6 +412,37 @@ export async function search(client: pg.Client, q: string, origins: Origin[], li
   return res.rows.map((r) => ({ kind: r.kind, text: r.text, date: r.date ? day(r.date) : null }))
 }
 
+export interface TrackRecord {
+  koppels: number
+  // Brier scores on the same koppels: the AI's chance against the totalisator's
+  ai: number
+  tote: number
+}
+
+// How the AI's win chances did against the tote, over all decided koppels that had both; the
+// draverij of today is left out. The outcome is looked up directly, so no terugblik is needed
+export async function aiTrackRecord(client: pg.Client, origins: Origin[], excludeDraverijId: string): Promise<TrackRecord | null> {
+  const res = await client.query<{ n: string; ai: string | null; tote: string | null }>(
+    `select count(*) as n, avg(power(s.p_ai - s.o, 2)) as ai, avg(power(s.p_tote - s.o, 2)) as tote
+     from (
+       select p.p_ai, p.p_tote,
+         (select case when k.winner = p.horse_id then 1 else 0 end from kb.koppel k
+          where k.draverij_id = p.draverij_id and k.omloop = p.omloop and k.status = 'definitief' and k.winner is not null
+            and ((k.horse_a = p.horse_id and k.horse_b = p.opponent_id) or (k.horse_b = p.horse_id and k.horse_a = p.opponent_id))
+          limit 1) as o
+       from kb.prediction p
+       where p.origin = any($1) and p.draverij_id <> $2 and p.p_ai is not null and p.p_tote is not null and p.opponent_id is not null
+     ) s
+     where s.o is not null`,
+    [origins, excludeDraverijId],
+  )
+  const row = res.rows[0]
+  const n = Number(row?.n ?? 0)
+  if (!n || row?.ai == null || row.tote == null) return null
+  const round = (v: string) => Math.round(Number(v) * 1000) / 1000
+  return { koppels: n, ai: round(row.ai), tote: round(row.tote) }
+}
+
 export async function getMeta<T>(client: pg.Client, key: string): Promise<T | null> {
   const res = await client.query<{ value: T }>(`select value from kb.meta where key = $1`, [key])
   return res.rows[0]?.value ?? null

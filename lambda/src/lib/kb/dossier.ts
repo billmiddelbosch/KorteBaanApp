@@ -2,7 +2,7 @@
 // and the answers of the kennisbank tools. Pure, so the wording is testable.
 import type { Backtest, Rating } from './glicko'
 import type { Scorecard } from './write'
-import type { ActiveHorse, BaanEdition, ClaimRow, HeadToHead, HorseTotals, LessonRow, PikeurYear, SearchHit, SideStats, Start } from './queries'
+import type { ActiveHorse, BaanEdition, ClaimRow, HeadToHead, HorseTotals, LessonRow, PikeurYear, SearchHit, SideStats, Start, TrackRecord } from './queries'
 
 const HALF_LIFE_DAYS = 365
 
@@ -125,6 +125,24 @@ export function formatBacktest(b: Backtest | null): string {
   return `Ratings getoetst op ${b.matches} koppels sinds ${b.from}: Brier ${b.brier} (muntworp 0,25), favoriet won ${pct(b.hitRate)}.`
 }
 
+// Below this many scored koppels the comparison with the tote says too little
+export const MIN_TRACK_KOPPELS = 50
+
+// The AI's own record against the tote, with what that means for deviating from the board
+export function formatTrackRecord(t: TrackRecord | null): string {
+  const b = (v: number) => String(v).replace('.', ',')
+  const head = t
+    ? `Jouw winkansen getoetst op ${t.koppels} koppels met bekende quota: Brier ${b(t.ai)}, de tote ${b(t.tote)} (lager is beter).`
+    : 'Jouw winkansen zijn nog niet getoetst tegen de uitslag.'
+  if (!t || t.koppels < MIN_TRACK_KOPPELS) {
+    return `${head} Dat is te weinig om te weten of je beter voorspelt dan de tote. Neem de kans die het bord aangeeft als vertrekpunt en wijk daar alleen sterk van af met een concrete, actuele reden (afmelding, pikeurwissel, galopperen, zware vorige dag).`
+  }
+  if (t.ai >= t.tote) {
+    return `${head} De tote voorspelt beter dan jij. Neem de kans van het bord als vertrekpunt en wijk alleen af met een concrete, actuele reden; een inzet die alleen op jouw afwijkende inschatting rust, heeft geen bewezen voordeel.`
+  }
+  return `${head} Je voorspelt beter dan de tote, dus afwijken van het bord is verdedigbaar. Onderbouw elke grote afwijking concreet.`
+}
+
 export interface Dossier {
   stand: string | null
   today: string
@@ -137,6 +155,7 @@ export interface Dossier {
   lessons: LessonRow[]
   backtest: Backtest | null
   ratingsPredictive: boolean
+  trackRecord: TrackRecord | null
 }
 
 // The part of the system prompt with what the kennisbank knows before any field is known
@@ -160,6 +179,7 @@ export function formatDossier(d: Dossier): string {
   if (d.lessons.length) lines.push('', '### Lessen uit eerdere evaluaties', ...formatLessons(d.lessons).map((l) => `- ${l}`))
   lines.push('', `### Ratings`, formatBacktest(d.backtest))
   if (!d.ratingsPredictive) lines.push('Ratingkansen voorspellen (nog) niet beter dan een muntworp; de tools tonen ze daarom niet.')
+  lines.push('', '### Jouw trefzekerheid', formatTrackRecord(d.trackRecord))
   return lines.join('\n')
 }
 

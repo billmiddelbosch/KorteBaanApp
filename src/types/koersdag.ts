@@ -19,7 +19,7 @@ export interface Suggestion {
   odds?: number | null
   // Expected return per euro (chance × odds − 1); null without odds
   expectedValue?: number | null
-  // Break-even quota (1 / chance)
+  // Threshold quota, margin included (1.1 / chance): "Alleen inzetten bij quota ≥ …"
   minOdds?: number | null
 }
 

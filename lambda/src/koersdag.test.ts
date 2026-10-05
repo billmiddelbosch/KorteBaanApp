@@ -130,7 +130,7 @@ const runWorker = async () => {
   await worker(job, context)
 }
 
-const reply = (body: unknown) => ({ text: `<koersdag>${JSON.stringify(body)}</koersdag>`, sources: [] })
+const reply = (body: unknown) => ({ text: `<koersdag>${JSON.stringify(body)}</koersdag>`, sources: [], truncated: false })
 
 const KEPT = reply({
   bevindingen: ['Geen afmeldingen'],
@@ -374,7 +374,7 @@ describe('during the koersdag', () => {
     const id = await started()
     const next = await call('POST', '/koersdagen/{id}/next', { as: user, params: { id } })
     expect(next.body).toMatchObject({ omloop: 2, status: 'thinking' })
-    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Geen idee', sources: [] })
+    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Geen idee', sources: [], truncated: false })
     await runWorker()
     const failed = (await call('GET', '/koersdagen/{id}', { as: user, params: { id } })).body
     expect(failed).toMatchObject({ status: 'error', error: 'De AI gaf een onleesbaar antwoord. Probeer het opnieuw.' })

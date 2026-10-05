@@ -78,6 +78,8 @@ export interface ChatTurn {
 export interface ChatReply {
   text: string
   sources: { url: string; title: string }[]
+  // The output limit cut the answer off mid-way
+  truncated: boolean
 }
 
 export type ClaudeErrorKind = 'auth' | 'limit' | 'unavailable' | 'other'
@@ -340,5 +342,5 @@ export async function askClaude(token: string, input: AskInput): Promise<ChatRep
     }
     throw new ClaudeError('other', 'Claude gaf een leeg antwoord. Probeer het opnieuw.')
   }
-  return { text, sources: sourcesOf(content) }
+  return { text, sources: sourcesOf(content), truncated: stops.at(-1) === 'max_tokens' }
 }

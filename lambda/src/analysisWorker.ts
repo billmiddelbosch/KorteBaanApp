@@ -4,6 +4,7 @@ import {
   DEFAULT_INSTRUCTION,
   MAX_REPLY_CHARS,
   buildSystemPrompt,
+  markTruncated,
   type ChatRecord,
 } from './lib/analysis'
 import { ChatChangedError, getChat, getInstruction, putChat, saveKnowledge } from './lib/analysisStore'
@@ -20,6 +21,8 @@ const CLAUDE_TIMEOUT_MS = 4 * 60 * 1000
 // Rounds of kennisbank tool calls and web searches per turn
 const KB_TOOL_ROUNDS = 4
 const SEARCH_BUDGET = 8
+// Output limit per request: explanation plus the <advies> JSON easily exceeds the default 4096
+const MAX_TOKENS = 16_000
 
 async function save(alias: Alias, job: WorkerJob, chat: ChatRecord) {
   try {
@@ -68,9 +71,12 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
       turns: chat.messages.map((m) => ({ role: m.role, text: m.text })),
       timeoutMs: CLAUDE_TIMEOUT_MS,
       searchBudget: SEARCH_BUDGET,
+      maxTokens: MAX_TOKENS,
       ...(kbTools ? { ...kbTools, maxToolRounds: KB_TOOL_ROUNDS } : {}),
     })
 
+    if (reply.truncated) console.warn('Analysis reply hit the output limit')
+    const text = reply.truncated ? markTruncated(reply.text) : reply.text
     const now = new Date().toISOString()
     await save(alias, job, {
       ...chat,
@@ -82,7 +88,7 @@ export async function handler(job: WorkerJob, context: Context): Promise<void> {
         {
           id: `m-${randomUUID()}`,
           role: 'assistant',
-          text: reply.text.slice(0, MAX_REPLY_CHARS),
+          text: text.slice(0, MAX_REPLY_CHARS),
           sources: reply.sources,
           createdAt: now,
         },

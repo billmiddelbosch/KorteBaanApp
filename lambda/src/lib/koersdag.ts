@@ -31,7 +31,7 @@ export interface Suggestion {
   odds?: number | null
   // Computed by the app: expected return per euro staked (chance × odds − 1); null without odds
   expectedValue?: number | null
-  // Computed by the app: the lowest quota at which the bet breaks even (1 / chance)
+  // Computed by the app: the lowest quota worth betting at, margin included (MIN_VALUE_FACTOR / chance)
   minOdds?: number | null
 }
 
@@ -44,9 +44,9 @@ export function expectedValue(chance: number | null, odds: number | null): numbe
   return Math.round((chance * odds - 1) * 100) / 100
 }
 
-// Break-even quota: below this the bet loses money on average
+// Threshold quota with the margin built in: below this the bet is not worth it
 export function minOddsFor(chance: number | null): number | null {
-  return chance === null ? null : Math.round((1 / chance) * 100) / 100
+  return chance === null ? null : Math.round((MIN_VALUE_FACTOR / chance) * 100) / 100
 }
 
 export interface PhotoCheck {
@@ -220,6 +220,15 @@ function describeProposal(p: AdviceProposal): string {
     .join('\n')
 }
 
+// Result of the bets that are settled so far, and what is still open
+function describeResult(bets: Bet[]): string {
+  const settled = bets.filter((b) => b.winnings !== null)
+  const open = round(bets.filter((b) => b.winnings === null).reduce((sum, b) => sum + b.amount, 0))
+  const result = round(settled.reduce((sum, b) => sum + b.winnings! - b.amount, 0))
+  const sign = result > 0 ? '+' : result < 0 ? '−' : ''
+  return `Resultaat van de afgerekende inzetten: ${settled.length ? `${sign}${euro(Math.abs(result))}` : 'nog geen'}. Nog niet afgerekend: ${euro(open)}.`
+}
+
 function describeUpdate(u: KoersdagUpdate): string {
   const advice = u.advice.length
     ? u.advice
@@ -269,6 +278,7 @@ export function buildKoersdagPrompt(input: {
 Vandaag is het ${formatDutchDate(input.today)}. De gebruiker is op de kortebaandraverij in ${record.draverij.place} en gebruikt de app tijdens de koersdag, op de telefoon. Dit is geen gesprek: je geeft per omloop één overzicht dat de app als kaart toont.
 
 Budget: ${euro(record.budget)}. Ingezet: ${euro(staked)}. Uitbetaald: ${euro(paidOut)}. Nog over: ${euro(remaining)}.
+${describeResult(record.bets)}
 Het budget is een richtlijn van de gebruiker, geen harde grens: jij adviseert, de gebruiker beslist wat er met het advies gebeurt.
 
 Vastgelegd advies van vóór de koersdag:
@@ -282,12 +292,16 @@ ${board.length ? `Afgelezen van bordfoto's die bezoekers vandaag maakten (nieuws
 
 ## Vorm van je antwoord
 Antwoord met precies één blok in deze vorm (geldige JSON, bedragen in euro's of null) en verder niets:
-<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "bord": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "kans": 0.45, "quota": 3.1, "onderbouwing": "…", "nieuw": false}]}, "kansen": [{"koppel": 1, "links": "…", "rechts": "…", "winkans_links": 0.55, "quota_links": 2.4, "quota_rechts": 3.1}], "finale": false}</koersdag>
+<koersdag>{"bevindingen": ["Afmelding: …", "Loting koppel 3 gewijzigd: …", "Quota …", "Niet doen: … op 1,8, …"], "oordeel": "blijft", "wijzigingen": [], "foto": null, "bord": null, "advies": {"toelichting": "…", "keuzes": [{"koers": "${omloop}, koppel 2", "inzet": "Winnaar: …", "bedrag": 5, "kans": 0.45, "quota": 3.1, "onderbouwing": "…", "nieuw": false}]}, "kansen": [{"koppel": 1, "links": "…", "rechts": "…", "winkans_links": 0.55, "quota_links": 2.4, "quota_rechts": 3.1}], "finale": false}</koersdag>
 
 - "oordeel" is "blijft" als het vorige advies (of het vastgelegde advies) nog klopt, anders "aangepast"; zet bij "aangepast" in "wijzigingen" kort wat er veranderde en waarom.
 - "advies" gaat over wat er nú (extra) ingezet moet worden. Richt je op wat er nog over is van het budget, maar houd het advies open: is het budget (bijna) op of is een kans meer inzet waard, geef die keuze dan toch, met het bedrag dat je passend vindt, en zeg in de "onderbouwing" dat het buiten het budget valt. Is het beter om niet (extra) in te zetten, geef dan een lege lijst "keuzes" en leg het uit in "toelichting"; dat het budget op is, is daarvoor alleen geen reden.
-- Geef bij elke keuze "kans": jouw inschatting (0–1) dat precies deze inzet uitbetaalt, en "quota": de quota van het bord voor deze inzet (winnend of plaats), of null als je die niet kent. De kans past bij je "kansen" per koppel en bij alle koppels die het paard nog moet winnen. De app rekent zelf de verwachte waarde uit (kans × quota − 1 per euro) en, zonder quota, de minimale quota (1 / kans).
-- Adviseer alleen inzetten met een duidelijk positieve verwachte waarde: kans × quota minstens ${String(MIN_VALUE_FACTOR).replace('.', ',')}. De quota schuiven nog tot de inzet sluit en jouw kans is een schatting; daarom die marge. Een sterke favoriet met een lage quota is dus vaak géén goede inzet. Is de quota onbekend, geef de keuze alleen als de minimale quota realistisch is en noem in de "onderbouwing" vanaf welke quota het de moeite waard is.
+- Geef bij elke keuze "kans": jouw inschatting (0–1) dat precies deze inzet uitbetaalt, en "quota": de quota van het bord voor deze inzet (winnend of plaats), of null als je die niet kent. De kans past bij je "kansen" per koppel en bij alle koppels die het paard nog moet winnen. De app rekent zelf de verwachte waarde uit (kans × quota − 1 per euro) en de drempelquota met de marge erin (${String(MIN_VALUE_FACTOR).replace('.', ',')} / kans), en toont die als "Alleen inzetten bij quota ≥ …". Noem zelf geen andere drempel dan die.
+- Adviseer alleen inzetten met een duidelijk positieve verwachte waarde: kans × quota minstens ${String(MIN_VALUE_FACTOR).replace('.', ',')}. De quota schuiven nog tot de inzet sluit en jouw kans is een schatting; daarom die marge. Een sterke favoriet met een lage quota is dus vaak géén goede inzet. Is de quota onbekend of ligt die dicht bij de drempel, geef de keuze alleen als de drempelquota realistisch is en zeg in de "onderbouwing" wat de gebruiker doet als het bord daaronder blijft: "anders …" (niet inzetten, of een andere keuze die dan wél waarde heeft).
+- Is een paard op het bord duidelijk overgespeeld (de kans die de quota aangeeft, 1 / quota, ligt duidelijk boven jouw kans en je hebt daar een concrete reden voor), zet dan in "bevindingen": "Niet doen: <paard> op <quota>, <reden in een paar woorden>". Alleen bij een duidelijke reden, hooguit twee per omloop; een lage quota alleen is geen reden.
+- Beoordeel de keuzes ook als geheel, niet alleen elk op zich. Tel de bedragen op en ga per koers na wat elke mogelijke uitslag oplevert tegenover alles wat je op die koers adviseert. Keuzes die elkaar uitsluiten (beide paarden van een koppel, meerdere paarden voor dezelfde winnaar) of op hetzelfde neerkomen, mogen samen alleen als het geheel een positieve verwachte waarde houdt en de meest waarschijnlijke winnende uitslag meer uitbetaalt dan de totale inzet op die koers; anders laat je de zwakste keuze weg. Spreid niet om het spreiden.
+- Heeft het advies meer dan één keuze, vat dan in "toelichting" in één zin het geheel samen: wat het kost, wat het gemiddeld oplevert en wat er gebeurt als het tegenzit.
+- Jaag verlies niet na: een achterstand vandaag is geen reden om meer of riskanter in te zetten. Elke keuze moet ook zonder die achterstand een goede inzet zijn.
 - Zie je in een volgende omloop een grote kans (een paard dat je duidelijk hoger inschat dan de quota doet vermoeden), noem die dan in "toelichting", ook als het budget daarvoor niet meer toereikend is. De gebruiker kiest zelf wat te doen.
 - Zet "nieuw" op true bij een keuze die nieuw is of anders dan in het vorige advies.
 - "kansen": per koppel van de ${omloop} jouw inschatting dat het linker paard wint (0–1), met de winnend-quota van het bord als je die kent (anders null). Alleen als de loting bekend is, anders een lege lijst. De app legt ze vast en vergelijkt ze na afloop met de uitslag.
