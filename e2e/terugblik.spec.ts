@@ -132,8 +132,18 @@ test.describe('Terugblik', () => {
     await expect(page.getByText(lesson)).toBeVisible()
     await page.getByRole('button', { name: `Les verwijderen: ${lesson}` }).click()
     const dialog = page.getByRole('dialog', { name: 'Les verwijderen?' })
-    await dialog.getByRole('button', { name: 'Les verwijderen' }).click()
+    await dialog.getByRole('button', { name: 'Les houden' }).click()
     await expect(dialog).toBeHidden()
+    await expect(page.getByText(lesson)).toBeVisible()
+
+    // The mock is the test environment: a lesson can move to production and leaves the list
+    await expect(
+      page.getByText('Dit zijn de lessen van de testomgeving', { exact: false }),
+    ).toBeVisible()
+    await page.getByRole('button', { name: `Naar productie: ${lesson}` }).click()
+    const promote = page.getByRole('dialog', { name: 'Les naar productie?' })
+    await promote.getByRole('button', { name: 'Naar productie' }).click()
+    await expect(promote).toBeHidden()
     await expect(page.getByText(lesson)).toHaveCount(0)
     await expect(page.getByText('Nog geen lessen.', { exact: false })).toBeVisible()
   })

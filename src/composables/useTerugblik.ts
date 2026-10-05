@@ -4,7 +4,7 @@ import { errorMessage } from '@/lib/errors'
 import type { CompressedPhoto } from '@/lib/photo'
 import { useAuthStore } from '@/stores/auth'
 import type {
-  Lesson,
+  LessonList,
   OmloopResult,
   TerugblikDetail,
   TerugblikList,
@@ -44,14 +44,29 @@ export const useTerugblikOverview = () =>
 
 // Owner: the lessons the AI learned from evaluations
 export function useLessons() {
-  const state = useLoad(async () => (await api.get<{ lessons: Lesson[] }>('/lessons')).data.lessons)
+  // canPromote: only test lessons can move to production
+  const state = useLoad(async () => (await api.get<LessonList>('/lessons')).data)
+  const list = computed(() => state.data.value?.lessons ?? [])
+  const canPromote = computed(() => state.data.value?.canPromote === true)
+
+  const drop = (id: string) => {
+    if (state.data.value) {
+      state.data.value = { ...state.data.value, lessons: list.value.filter((l) => l.id !== id) }
+    }
+  }
 
   async function remove(id: string) {
     await api.delete(`/lessons/${encodeURIComponent(id)}`)
-    state.data.value = state.data.value?.filter((l) => l.id !== id) ?? null
+    drop(id)
   }
 
-  return { ...state, remove }
+  // The lesson moves to production and leaves this (test) list
+  async function promote(id: string) {
+    await api.post(`/lessons/${encodeURIComponent(id)}/promote`)
+    drop(id)
+  }
+
+  return { ...state, list, canPromote, remove, promote }
 }
 
 // One finished koersdag: uitslagen, evaluation and bet corrections; polls while the AI works

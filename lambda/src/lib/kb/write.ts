@@ -276,6 +276,14 @@ export async function setLessonStatus(client: pg.Client, env: Env, id: string, s
 
 export const removeLesson = (client: pg.Client, env: Env, id: string) => setLessonStatus(client, env, id, 'verwijderd')
 
+// Moves an active test lesson to production, with its subjects, trust and history. Test keeps
+// reading it (it sees prod lessons too); false when it doesn't exist or isn't an active test lesson.
+export async function promoteLesson(client: pg.Client, id: string): Promise<boolean> {
+  if (!UUID.test(id)) return false
+  const res = await client.query(`update kb.lesson set origin = 'prod' where id = $1 and origin = 'dev' and status = 'actief'`, [id])
+  return (res.rowCount ?? 0) > 0
+}
+
 // ── Predictions ──────────────────────────────────────────────────────────
 
 export interface Kans {

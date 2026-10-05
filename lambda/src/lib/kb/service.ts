@@ -7,7 +7,7 @@ import type { CustomTool, ToolRunner } from '../claude'
 import { kbClient } from './db'
 import { formatDossier, formatLessons, formatScorecard } from './dossier'
 import { ratingIsPredictive, type Backtest } from './glicko'
-import { baanHistory, getMeta, lastIngested, lessonsFor, originsFor, seasonLeaders, sideStats, type Env, type LessonRow } from './queries'
+import { aiTrackRecord, baanHistory, getMeta, lastIngested, lessonsFor, originsFor, seasonLeaders, sideStats, type Env, type LessonRow } from './queries'
 import { kbTools, type ToolMode } from './tools'
 import * as write from './write'
 
@@ -37,12 +37,13 @@ export function dossier(alias: Env, draverij: Draverij, today: string): Promise<
     const baanId = slugify(draverij.place)
     const origins = originsFor(alias)
     const year = Number(draverij.date.slice(0, 4))
-    const [stand, history, sides, backtest, lessons] = await Promise.all([
+    const [stand, history, sides, backtest, lessons, trackRecord] = await Promise.all([
       lastIngested(c),
       baanHistory(c, baanId, 11),
       sideStats(c, baanId),
       getMeta<Backtest>(c, 'rating_backtest'),
       lessonsFor(c, [{ kind: 'baan', id: baanId }], origins, 12),
+      aiTrackRecord(c, [alias], draverij.id),
     ])
     let leadersYear = year
     let leaders = await seasonLeaders(c, year, 15)
@@ -63,6 +64,7 @@ export function dossier(alias: Env, draverij: Draverij, today: string): Promise<
       lessons,
       backtest,
       ratingsPredictive: ratingIsPredictive(backtest),
+      trackRecord,
     })
   })
 }
@@ -127,4 +129,9 @@ export async function listLessons(alias: Env, limit: number): Promise<write.List
 export async function removeLesson(alias: Env, id: string): Promise<boolean> {
   if (!kbConfigured()) return false
   return write.removeLesson(await client(), alias, id)
+}
+
+export async function promoteLesson(id: string): Promise<boolean> {
+  if (!kbConfigured()) return false
+  return write.promoteLesson(await client(), id)
 }
