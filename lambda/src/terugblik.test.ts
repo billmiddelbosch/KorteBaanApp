@@ -145,6 +145,7 @@ const params = { id: ID }
 const RESULTS = {
   text: `<uitslagen>${JSON.stringify({ gevonden: true, omlopen: [{ omloop: 2, winnaar: 'Hessel B', plaatsen: '' }, { omloop: 1, winnaar: 'Fleur', plaatsen: '2e: Jan' }] })}</uitslagen>`,
   sources: [{ url: 'https://example.nl/uitslag', title: 'Uitslag' }],
+  truncated: false,
 }
 const EVALUATION = {
   text: `<evaluatie>${JSON.stringify({
@@ -156,6 +157,7 @@ const EVALUATION = {
     lessen: ['Op zware baan wint Hessel B vaker.'],
   })}</evaluatie>`,
   sources: [],
+  truncated: false,
 }
 
 let user: UserRecord
@@ -270,7 +272,7 @@ describe('uitslagen and evaluation', () => {
   it('reports uitslagen that were not found', async () => {
     seedKoersdag(user)
     await call('POST', '/terugblik/{id}/results/fetch', { as: user, params })
-    vi.mocked(askClaude).mockResolvedValueOnce({ text: '<uitslagen>{"gevonden": false, "omlopen": []}</uitslagen>', sources: [] })
+    vi.mocked(askClaude).mockResolvedValueOnce({ text: '<uitslagen>{"gevonden": false, "omlopen": []}</uitslagen>', sources: [], truncated: false })
     await runWorker()
     const res = await call('GET', '/terugblik/{id}', { as: user, params })
     expect(res.body).toMatchObject({ status: 'error', error: expect.stringContaining('Vul ze zelf in') })

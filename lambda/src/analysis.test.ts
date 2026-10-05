@@ -82,6 +82,7 @@ const { handler: worker } = await import('./analysisWorker')
 const { handler: aiInstruction } = await import('./aiInstruction')
 const { askClaude, ClaudeError } = await import('./lib/claude')
 const { dayOf } = await import('./lib/store')
+const { TRUNCATED_NOTE } = await import('./lib/analysis')
 const { DEFAULT_INSTRUCTION } = await import('./lib/analysis')
 
 const context = {
@@ -153,7 +154,7 @@ describe('starting an analysis', () => {
   })
 
   it('creates the chat, counts usage, runs the AI and continues the same chat on a second start', async () => {
-    vi.mocked(askClaude).mockResolvedValue({ text: 'Wat is je budget?', sources: [{ url: 'https://a.nl', title: 'A' }] })
+    vi.mocked(askClaude).mockResolvedValue({ text: 'Wat is je budget?', sources: [{ url: 'https://a.nl', title: 'A' }], truncated: false })
     const date = upcoming(3)
     const created = await call(analysis, 'POST', '/analyses', { as: friend, body: { place: 'Wolvega', date } })
     expect(created.status).toBe(201)
@@ -201,7 +202,7 @@ describe('starting an analysis', () => {
 
 describe('chatting', () => {
   async function startChat(user = friend) {
-    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Wat is je budget?', sources: [] })
+    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Wat is je budget?', sources: [], truncated: false })
     const res = await call(analysis, 'POST', '/analyses', { as: user, body: { place: 'Wolvega', date: upcoming(3) } })
     await runWorker()
     return res.body.id as string
@@ -215,7 +216,7 @@ describe('chatting', () => {
     expect((await send('')).body.message).toBe('Typ eerst een bericht.')
     expect((await send('x'.repeat(2001))).status).toBe(400)
 
-    vi.mocked(askClaude).mockResolvedValueOnce({ text: ADVICE_REPLY, sources: [] })
+    vi.mocked(askClaude).mockResolvedValueOnce({ text: ADVICE_REPLY, sources: [], truncated: false })
     const sent = await send('20 euro, weinig risico')
     expect(sent.status).toBe(202)
     expect(sent.body.status).toBe('thinking')
@@ -244,7 +245,7 @@ describe('chatting', () => {
     expect((await call(analysis, 'GET', '/analyses', { as: friend })).body[0].hasAdvice).toBe(true)
 
     // Restart clears the chat but keeps the advice
-    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Opnieuw: wat is je budget?', sources: [] })
+    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Opnieuw: wat is je budget?', sources: [], truncated: false })
     const restarted = await call(analysis, 'POST', '/analyses/{id}/restart', { as: friend, params: { id } })
     expect(restarted.body.messages).toHaveLength(1)
     expect(restarted.body.advice).not.toBeNull()
@@ -265,7 +266,7 @@ describe('chatting', () => {
     expect(db.ai?.status).toBe('error')
 
     db.ai = { status: 'connected', tokenHint: '…abcd', connectedAt: '' }
-    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Hallo!', sources: [] })
+    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Hallo!', sources: [], truncated: false })
     expect((await call(analysis, 'POST', '/analyses/{id}/retry', { as: friend, params: { id } })).status).toBe(202)
     await runWorker()
     const retried = (await call(analysis, 'GET', '/analyses/{id}', { as: friend, params: { id } })).body
@@ -273,9 +274,21 @@ describe('chatting', () => {
     expect(retried.messages.at(-1).text).toBe('Hallo!')
   })
 
+  it('asks for room for long advice and marks a truncated reply', async () => {
+    const id = await startChat()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(askClaude).mockResolvedValueOnce({ text: 'Lang advies.\n<advies>{"keuzes": [{"inzet":', sources: [], truncated: true })
+    await call(analysis, 'POST', '/analyses/{id}/messages', { as: friend, params: { id }, body: { text: 'Advies?' } })
+    await runWorker()
+    expect(vi.mocked(askClaude).mock.lastCall?.[1].maxTokens).toBe(16_000)
+    const reply = (await call(analysis, 'GET', '/analyses/{id}', { as: friend, params: { id } })).body.messages.at(-1)
+    expect(reply.text).toBe(`Lang advies.\n\n${TRUNCATED_NOTE}`)
+    expect(reply.proposal).toBeNull()
+  })
+
   it('drops a worker reply when the chat was restarted meanwhile', async () => {
     const id = await startChat()
-    vi.mocked(askClaude).mockResolvedValue({ text: 'Antwoord', sources: [] })
+    vi.mocked(askClaude).mockResolvedValue({ text: 'Antwoord', sources: [], truncated: false })
     await call(analysis, 'POST', '/analyses/{id}/messages', { as: friend, params: { id }, body: { text: 'Vraag' } })
     await call(analysis, 'POST', '/analyses/{id}/restart', { as: friend, params: { id } })
     await runWorker() // the stale job: ignored

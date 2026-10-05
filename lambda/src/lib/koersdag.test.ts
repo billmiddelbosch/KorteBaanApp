@@ -79,8 +79,8 @@ describe('parseUpdate', () => {
       }),
       meta(),
     )
-    expect(update?.advice[0]).toMatchObject({ chance: 0.4, odds: 3.2, expectedValue: 0.28, minOdds: 2.5 })
-    expect(update?.advice[1]).toMatchObject({ chance: 0.5, odds: null, expectedValue: null, minOdds: 2 })
+    expect(update?.advice[0]).toMatchObject({ chance: 0.4, odds: 3.2, expectedValue: 0.28, minOdds: 2.75 })
+    expect(update?.advice[1]).toMatchObject({ chance: 0.5, odds: null, expectedValue: null, minOdds: 2.2 })
     expect(update?.advice[2]).toMatchObject({ chance: null, odds: null, expectedValue: null, minOdds: null })
   })
 
@@ -230,7 +230,36 @@ describe('koersdag prompt', () => {
     const { system } = prompt('fetch')
     expect(system).toContain('"kans": 0.45, "quota": 3.1')
     expect(system).toContain('kans × quota minstens 1,1')
-    expect(system).toContain('vanaf welke quota')
+    expect(system).toContain('drempelquota met de marge erin (1,1 / kans)')
+    expect(system).toContain('Alleen inzetten bij quota ≥')
+    expect(system).toContain('"anders …"')
+  })
+
+  it('asks to name clearly overplayed horses as Niet doen in the findings', () => {
+    const { system } = prompt('fetch')
+    expect(system).toContain('"Niet doen: <paard> op <quota>, <reden in een paar woorden>"')
+    expect(system).toContain('een lage quota alleen is geen reden')
+  })
+
+  it('asks to judge the advice as a whole and not to chase losses', () => {
+    const { system } = prompt('fetch')
+    expect(system).toContain('Beoordeel de keuzes ook als geheel')
+    expect(system).toContain('meer uitbetaalt dan de totale inzet op die koers')
+    expect(system).toContain('Jaag verlies niet na')
+    expect(system).toMatch(/Resultaat van de afgerekende inzetten: nog geen\. Nog niet afgerekend: €\s0,00\./)
+  })
+
+  it('shares the result of the settled bets and what is still open', () => {
+    const bet = (amount: number, winnings: number | null) => ({ id: 'b', omloop: 1, suggestionId: null, bet: 'x', amount, winnings, createdAt: '' })
+    const { system } = buildKoersdagPrompt({
+      instruction: 'x',
+      record: { ...record, bets: [bet(20, 0), bet(10, 15), bet(5, null)] },
+      advice: undefined,
+      today: '2026-09-23',
+      kind: 'fetch',
+      board: [],
+    })
+    expect(system).toMatch(/Resultaat van de afgerekende inzetten: −€\s15,00\. Nog niet afgerekend: €\s5,00\./)
   })
 
   it('puts the kennisbank before the quotabord and asks for win chances per koppel', () => {
